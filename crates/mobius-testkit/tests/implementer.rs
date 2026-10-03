@@ -2,13 +2,14 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::time::Duration;
 
 use mobius_domain::{InboxKind, Session, TranscriptRow};
 use mobius_engine::{Engine, github, inbox, tasks, workstreams};
 use mobius_testkit::fake_github::{
     BOT_USER_ID, CheckRun, FakeGitHub, INSTALLATION_TOKEN, PullRequest,
 };
-use mobius_testkit::{git, install_fake_harness, start_with_config, wait_for};
+use mobius_testkit::{git, install_fake_harness, start_with, wait_for};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -61,8 +62,14 @@ async fn connect(
         "devin",
         &format!("{IMPLEMENTER_OPTIONS}\n{implementer}"),
     );
-    let engine =
-        start_with_config(data_dir.path(), "correct horse", &github.url, extra_config).await;
+    let engine = start_with(
+        data_dir.path(),
+        "correct horse",
+        &github.url,
+        extra_config,
+        |config| config.lead_idle_timeout = Duration::from_secs(60),
+    )
+    .await;
     github::convert_manifest(&engine, "manifest-code")
         .await
         .unwrap();

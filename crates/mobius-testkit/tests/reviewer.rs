@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use mobius_domain::{Author, InboxKind, Session, TranscriptRow};
 use mobius_engine::config::Config;
 use mobius_engine::{Engine, chat, github, inbox, workstreams};
@@ -83,7 +85,10 @@ async fn connect_with(
         "correct horse",
         &github.url,
         extra_config,
-        adjust,
+        |config| {
+            config.lead_idle_timeout = Duration::from_secs(60);
+            adjust(config);
+        },
     )
     .await;
     github::convert_manifest(&engine, "manifest-code")
@@ -732,7 +737,7 @@ async fn a_review_round_posts_a_comment_and_updates_the_same_comment_with_the_re
 async fn the_review_round_at_max_fix_rounds_shows_the_limit_and_starts_no_next_round() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;
-    let engine = connect(&data_dir, &github, "", FINDING, EACH_FIX).await;
+    let engine = connect(&data_dir, &github, "max_fix_rounds = 3", FINDING, EACH_FIX).await;
 
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
 
@@ -742,35 +747,35 @@ async fn the_review_round_at_max_fix_rounds_shows_the_limit_and_starts_no_next_r
             .iter()
             .any(|prompt| {
                 prompt.contains(
-                    " stop of #41 \"Add plan model\": the pull request has open items after 7 review rounds.",
+                    " stop of #41 \"Add plan model\": the pull request has open items after 3 review rounds.",
                 )
             })
             .then_some(())
     })
     .await;
-    assert_eq!(sessions(&engine, "reviewer").await.len(), 7);
+    assert_eq!(sessions(&engine, "reviewer").await.len(), 3);
     let comments = round_comments(&github);
-    assert_eq!(comments.len(), 7);
+    assert_eq!(comments.len(), 3);
     for (index, comment) in comments.iter().enumerate() {
         assert!(
-            comment.starts_with(&format!("Review ended, round {} of 7\n", index + 1)),
+            comment.starts_with(&format!("Review ended, round {} of 3\n", index + 1)),
             "{comment}"
         );
     }
     assert!(
-        comments[..6]
+        comments[..2]
             .iter()
             .all(|comment| comment.contains("Result: A fix round started.\n"))
     );
     assert!(
-        comments[6].contains(
-            "Result: Limit reached (7 of 7). Mobius added mobius:needs-human. Add a comment on this pull request to continue.\n"
+        comments[2].contains(
+            "Result: Limit reached (3 of 3). Mobius added mobius:needs-human. Add a comment on this pull request to continue.\n"
         ),
         "{}",
-        comments[6]
+        comments[2]
     );
-    assert_eq!(review_rounds(&engine, 41).await, 7);
-    assert_eq!(fix_rounds(&engine, 41).await, 6);
+    assert_eq!(review_rounds(&engine, 41).await, 3);
+    assert_eq!(fix_rounds(&engine, 41).await, 2);
     assert_eq!(
         task_state(&engine, 41).await.as_deref(),
         Some("needs_human")

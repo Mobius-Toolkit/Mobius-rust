@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 dioxus = { workspace = true, features = ["router"] }
+dioxus-icons = { workspace = true }
+dioxus-primitives = { workspace = true }
 futures-util = { workspace = true }
 mobius-api = { workspace = true }
 mobius-domain = { workspace = true }
@@ -20,5 +22,5 @@ sha2 = { workspace = true }
 dioxus-ssr = { workspace = true }
 
 [features]
-web = ["dioxus/web"]
+web = ["dioxus/web", "dioxus-primitives/web"]
 server = ["dioxus/server", "mobius-api/server"]

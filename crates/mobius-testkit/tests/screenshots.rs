@@ -114,17 +114,20 @@ struct Shot<'a> {
 
 // Outside a `dx` build, `asset!` gives the absolute source path of the file, and the page links that path.
 async fn serve_ui(engine: &Engine) -> String {
-    let css = fs::canonicalize(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../mobius-ui/assets/main.css"
-    ))
-    .unwrap();
-    let path = css.to_str().unwrap().to_string();
-    let router = dioxus::server::router(mobius_ui::App)
-        .route(
+    let mut router = dioxus::server::router(mobius_ui::App);
+    for name in ["main.css", "dx-components-theme.css"] {
+        let css = fs::canonicalize(format!(
+            "{}/../mobius-ui/assets/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let path = css.to_str().unwrap().to_string();
+        router = router.route(
             &path,
             get(async move || ([(CONTENT_TYPE, "text/css")], fs::read(&css).unwrap())),
-        )
+        );
+    }
+    let router = router
         .layer(Extension(engine.clone()))
         .layer(Extension(engine.store.clone()));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -785,7 +788,7 @@ async fn send_taps_once_and_the_buttons_are_easy_to_tap_on_the_phone() {
     let apart = check(
         &page,
         "(() => { const field = document.querySelector('.composer textarea').getBoundingClientRect();\
-         const buttons = [...document.querySelectorAll('.composer .btn')];\
+         const buttons = [...document.querySelectorAll('.composer button')];\
          return buttons.length > 0 && buttons.every((button) => {\
            const box = button.getBoundingClientRect();\
            return box.height >= 40 && (box.left >= field.right || box.right <= field.left);\
@@ -1171,7 +1174,10 @@ async fn screenshots() {
     for viewport in [DESKTOP, PHONE] {
         let (tasks_clicks, switch_clicks): (&[&str], &[&str]) = if viewport == PHONE {
             (
-                &[".btn.phone", ".sheet .sidetabs button:nth-child(2)"],
+                &[
+                    "button.phone:not(.upd)",
+                    ".sheet .sidetabs button:nth-child(2)",
+                ],
                 &[".head .switch"],
             )
         } else {
@@ -1520,7 +1526,7 @@ async fn the_note_closes_the_workstream_when_all_tasks_are_closed() {
         wait_until_live(&page).await;
         assert!(!check(&page, "!!document.querySelector('.closing')".to_string()).await);
         let done = format!(
-            "document.querySelector('a[href=\"/workstreams/owner/shop/{number}\"] .chip')?.textContent === 'done'"
+            "document.querySelector('a[href=\"/workstreams/owner/shop/{number}\"] [data-style]')?.textContent === 'done'"
         );
         assert!(!check(&page, done.clone()).await);
 

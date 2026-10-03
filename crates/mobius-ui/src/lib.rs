@@ -1,9 +1,15 @@
+pub mod components;
 mod markdown;
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::pin::pin;
 
+use components::badge::{Badge, BadgeVariant};
+use components::button::{Button, ButtonSize, ButtonVariant};
+use components::input::Input;
+use components::label::Label;
+use components::textarea::Textarea;
 use dioxus::fullstack::ServerEvents;
 use dioxus::prelude::*;
 use futures_util::future::{Either, select};
@@ -24,6 +30,10 @@ use mobius_domain::{
 use time::UtcOffset;
 use time::macros::format_description;
 
+#[css_module("/src/components/button/style.css")]
+struct ButtonStyles;
+
+const THEME_CSS: Asset = asset!("/assets/dx-components-theme.css");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 // The identifier of this web UI build. The server gives the same identifier at
@@ -141,6 +151,7 @@ meta.content = "width=device-width, initial-scale=1, interactive-widget=resizes-
         document::Meta { name: "apple-mobile-web-app-status-bar-style", content: "default" }
         // The service worker makes the app installable. It keeps no cache.
         document::Script { "navigator.serviceWorker?.register('/sw.js');" }
+        document::Stylesheet { href: THEME_CSS }
         document::Stylesheet { href: MAIN_CSS }
         Router::<Route> {}
     }
@@ -602,11 +613,12 @@ fn Frame() -> Element {
                         div { class: "modal",
                             div { class: "head",
                                 h2 { "Upgrade to {version}" }
-                                button { class: "btn ghost", onclick: move |_| changes_shown.set(false), "Close" }
+                                Button { variant: ButtonVariant::Ghost, onclick: move |_| changes_shown.set(false), "Close" }
                             }
                             ReleaseChanges { version: version.clone() }
                             div { class: "actions",
-                                button { class: "btn primary",
+                                Button {
+                                    variant: ButtonVariant::Primary,
                                     disabled: upgrading(),
                                     onclick: move |_| async move {
                                         changes_shown.set(false);
@@ -833,10 +845,10 @@ fn WorkstreamEntry(workstream: Workstream, needs_human: bool) -> Element {
             span { class: "grow", "{workstream.title}" }
             span { class: "muted small", "#{workstream.number}" }
             if workstream.all_tasks_closed {
-                span { class: "chip plain", "done" }
+                Badge { variant: BadgeVariant::Secondary, "done" }
             }
             if needs_human {
-                span { class: "chip warn", "needs you" }
+                Badge { variant: BadgeVariant::Secondary, "data-tone": "warning", "needs you" }
             }
             if unread > 0 {
                 span { class: "count", "{unread}" }
@@ -855,7 +867,13 @@ fn WorkstreamList() -> Element {
             } else {
                 h2 { class: "grow", "Workstreams" }
             }
-            Link { class: "btn primary", to: Route::NewWorkstream {}, "+ New" }
+            Link {
+                class: ButtonStyles::dx_button.to_string(),
+                "data-style": "primary",
+                "data-size": "default",
+                to: Route::NewWorkstream {},
+                "+ New"
+            }
         }
         div { class: "list",
             WorkstreamEntries {}
@@ -907,26 +925,32 @@ pub fn fix_button(repositories: &[RepositoryCheckup]) -> Option<&'static str> {
 
 fn label_status(status: &LabelStatus) -> Element {
     match status {
-        LabelStatus::Present => rsx! { span { class: "chip plain", "present" } },
+        LabelStatus::Present => rsx! { Badge { variant: BadgeVariant::Secondary, "present" } },
         LabelStatus::WrongColor(color) => rsx! {
-            span { class: "chip warn", "wrong color: #{color}" }
+            Badge { variant: BadgeVariant::Secondary, "data-tone": "warning", "wrong color: #{color}" }
         },
         // Mobius does not rename labels, so a human fixes the name.
         LabelStatus::WrongCase(name) => rsx! {
-            span { class: "chip warn", "wrong case: {name}" }
+            Badge { variant: BadgeVariant::Secondary, "data-tone": "warning", "wrong case: {name}" }
         },
-        LabelStatus::Missing => rsx! { span { class: "chip warn", "missing" } },
+        LabelStatus::Missing => {
+            rsx! { Badge { variant: BadgeVariant::Secondary, "data-tone": "warning", "missing" } }
+        }
     }
 }
 
 fn permission_status(status: &PermissionStatus) -> Element {
     match status {
-        PermissionStatus::Present => rsx! { span { class: "chip plain", "present" } },
+        PermissionStatus::Present => rsx! { Badge { variant: BadgeVariant::Secondary, "present" } },
         PermissionStatus::NotAccepted(url) => rsx! {
-            a { class: "chip warn", href: "{url}", target: "_blank", "not accepted: accept on GitHub" }
+            a { href: "{url}", target: "_blank",
+                Badge { variant: BadgeVariant::Secondary, "data-tone": "warning", "not accepted: accept on GitHub" }
+            }
         },
         PermissionStatus::Missing(url) => rsx! {
-            a { class: "chip warn", href: "{url}", target: "_blank", "missing: add on GitHub" }
+            a { href: "{url}", target: "_blank",
+                Badge { variant: BadgeVariant::Secondary, "data-tone": "warning", "missing: add on GitHub" }
+            }
         },
     }
 }
@@ -955,8 +979,8 @@ fn Checkup() -> Element {
         div { class: "head",
             h2 { class: "grow", "Checkup" }
             if let Some(text) = button {
-                button {
-                    class: "btn primary",
+                Button {
+                    variant: ButtonVariant::Primary,
                     disabled: fixing(),
                     onclick: move |_| async move {
                         fixing.set(true);
@@ -1120,7 +1144,7 @@ fn AgentRow(agent: ActiveAgent) -> Element {
                 }
             }
             if let Some(reason) = &session.queue_reason {
-                span { class: "chip warn",
+                Badge { variant: BadgeVariant::Secondary, "data-tone": "warning",
                     if reason.starts_with(PAUSED) { "paused" } else { "queued" }
                 }
             }
@@ -1163,7 +1187,7 @@ fn Inbox() -> Element {
             }
             for item in items {
                 div { key: "{item.id}", class: "item",
-                    span { class: "chip", {item.kind.name()} }
+                    Badge { {item.kind.name()} }
                     div { class: "grow",
                         div { "{item.text}" }
                         div { class: "muted small",
@@ -1174,8 +1198,8 @@ fn Inbox() -> Element {
                     }
                     div { class: "actions",
                         if item.kind == InboxKind::UsageLimit {
-                            button {
-                                class: "btn primary",
+                            Button {
+                                variant: ButtonVariant::Primary,
                                 onclick: move |_| async move {
                                     match inbox_resume(item.id).await {
                                         Ok(()) => error.set(String::new()),
@@ -1187,8 +1211,8 @@ fn Inbox() -> Element {
                         } else {
                             a { href: "{item.link}", target: "_blank", "Open on GitHub" }
                         }
-                        button {
-                            class: "btn",
+                        Button {
+                            variant: ButtonVariant::Outline,
                             onclick: move |_| async move {
                                 match inbox_dismiss(item.id).await {
                                     Ok(()) => error.set(String::new()),
@@ -1354,8 +1378,8 @@ fn Chat(owner: String, repo: String, number: i64) -> Element {
                     if all_tasks_closed {
                         div { class: "note closing",
                             span { "All tasks are closed." }
-                            button {
-                                class: "btn primary",
+                            Button {
+                                variant: ButtonVariant::Primary,
                                 disabled: close_busy,
                                 onclick: move |_| {
                                     let repository = close_repository.clone();
@@ -1390,7 +1414,7 @@ fn Chat(owner: String, repo: String, number: i64) -> Element {
                     }
                 },
                 tail: rsx! {
-                    button { class: "btn phone", onclick: move |_| sheet.set(true), "Agents" }
+                    Button { variant: ButtonVariant::Outline, class: "phone", onclick: move |_| sheet.set(true), "Agents" }
                 },
             }
             aside { class: "side",
@@ -1825,14 +1849,14 @@ fn Conversation(
                         send(());
                     },
                     div { class: "grow",
-                        textarea {
+                        Textarea {
                             rows: "1",
                             placeholder: "Write to the {agent}",
                             value: text,
-                            oninput: move |event| text.set(event.value()),
+                            oninput: move |event: FormEvent| text.set(event.value()),
                             // Safari reports the Enter that commits an IME candidate with
                             // isComposing false and keyCode 229.
-                            onkeydown: move |event| {
+                            onkeydown: move |event: KeyboardEvent| {
                                 if event.key() == Key::Enter
                                     && !event.modifiers().shift()
                                     && !event.is_composing()
@@ -1847,10 +1871,10 @@ fn Conversation(
                         div { class: "error", {send_error} }
                     }
                     if lead_state.writing {
-                        button {
-                            class: "btn danger",
+                        Button {
+                            variant: ButtonVariant::Destructive,
                             r#type: "button",
-                            onmousedown: move |event| event.prevent_default(),
+                            onmousedown: move |event: MouseEvent| event.prevent_default(),
                             onclick: move |_| {
                                 let (organization, repository) = stop_key.clone();
                                 async move {
@@ -1862,8 +1886,9 @@ fn Conversation(
                             "Stop"
                         }
                     }
-                    button {
-                        class: if mic_active() { "btn mic live" } else { "btn mic" },
+                    Button {
+                        variant: ButtonVariant::Outline,
+                        class: if mic_active() { "mic live" } else { "mic" },
                         r#type: "button",
                         onclick: move |_| {
                             let mut eval = document::eval(MIC_SCRIPT);
@@ -1909,11 +1934,11 @@ fn Conversation(
                         },
                         if mic_active() { "Stop mic" } else { "Mic" }
                     }
-                    button {
-                        class: "btn primary",
+                    Button {
+                        variant: ButtonVariant::Primary,
                         r#type: "submit",
                         disabled: sending(),
-                        onmousedown: move |event| event.prevent_default(),
+                        onmousedown: move |event: MouseEvent| event.prevent_default(),
                         "Send"
                     }
                 }
@@ -1958,7 +1983,7 @@ fn Agents(repository: String, number: i64, on_close: Option<EventHandler>) -> El
     let rows = agent_rows(shown_agents(nodes.into_values().collect(), show_stopped()));
     let close = on_close.map(|on_close| {
         rsx! {
-            button { class: "btn ghost", onclick: move |_| on_close.call(()), "Close" }
+            Button { variant: ButtonVariant::Ghost, onclick: move |_| on_close.call(()), "Close" }
         }
     });
 
@@ -2036,8 +2061,8 @@ fn NeedsHumanList(repository: String, number: i64) -> Element {
                         if let (Some(number), Some(url)) = (issue.pull_request, issue.pull_request_url) {
                             a { href: "{url}", target: "_blank", "PR #{number}" }
                         }
-                        button {
-                            class: "btn primary",
+                        Button {
+                            variant: ButtonVariant::Primary,
                             onclick: {
                                 let repository = repository.clone();
                                 move |_| {
@@ -2100,7 +2125,7 @@ fn TaskEntry(line: TaskLine) -> Element {
                     }
                 }
             }
-            span { class: if line.state == "open" { "chip plain" } else { "chip" }, "{line.state}" }
+            Badge { variant: if line.state == "open" { BadgeVariant::Secondary } else { BadgeVariant::Primary }, "{line.state}" }
         }
     }
 }
@@ -2145,13 +2170,13 @@ fn AgentEntry(node: AgentNode, depth: usize, onclick: EventHandler<MouseEvent>) 
                 div { class: "muted small", "{session.harness.name()} · {session.model} · {detail}" }
             }
             if session.ended_at.is_some() {
-                span { class: "chip plain", "stopped" }
+                Badge { variant: BadgeVariant::Secondary, "stopped" }
             }
             if let Some(reason) = &session.queue_reason {
                 if reason.starts_with(PAUSED) {
-                    span { class: "chip warn", "paused" }
+                    Badge { variant: BadgeVariant::Secondary, "data-tone": "warning", "paused" }
                 } else {
-                    span { class: "chip warn", "queued" }
+                    Badge { variant: BadgeVariant::Secondary, "data-tone": "warning", "queued" }
                 }
             }
         }
@@ -2196,11 +2221,11 @@ fn TranscriptEntry(line: TranscriptLine) -> Element {
                     span { class: "muted small", " {name}" }
                 }
                 if line.folded && line.body.is_some() {
-                    button { class: "btn ghost small", onclick: move |_| open.toggle(),
+                    Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm, onclick: move |_| open.toggle(),
                         if open() { "Hide" } else { "Show" }
                     }
                 }
-                button { class: "btn ghost small", onclick: move |_| raw.toggle(), "Raw" }
+                Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm, onclick: move |_| raw.toggle(), "Raw" }
                 if let Some(body) = line.body.as_ref().filter(|_| open()) {
                     pre { "{body}" }
                 }
@@ -2228,16 +2253,16 @@ fn Login() -> Element {
                     }
                 },
                 div { class: "brand", "Mobius" }
-                label { class: "label", r#for: "password", "Access password" }
-                input {
+                Label { html_for: "password", "Access password" }
+                Input {
                     id: "password",
                     r#type: "password",
                     autocomplete: "current-password",
                     value: password,
-                    oninput: move |event| password.set(event.value()),
+                    oninput: move |event: FormEvent| password.set(event.value()),
                 }
                 div { class: "error", {error} }
-                button { class: "btn primary", r#type: "submit", "Log in" }
+                Button { variant: ButtonVariant::Primary, r#type: "submit", "Log in" }
             }
         }
     }
@@ -2268,10 +2293,10 @@ fn Devices() -> Element {
                             }
                         }
                         if login.id == devices.this_device {
-                            span { class: "chip", "this device" }
+                            Badge { "this device" }
                         }
-                        button {
-                            class: "btn",
+                        Button {
+                            variant: ButtonVariant::Outline,
                             onclick: move |_| async move {
                                 if logout(login.id).await.is_ok() {
                                     resource.restart();
@@ -2347,22 +2372,22 @@ fn GitHub() -> Element {
                     error.set(text);
                 }
             },
-            label { class: "label", r#for: "account", "Account or organization" }
-            input {
+            Label { html_for: "account", "Account or organization" }
+            Input {
                 id: "account",
                 value: account,
-                oninput: move |event| account.set(event.value()),
+                oninput: move |event: FormEvent| account.set(event.value()),
             }
-            label { class: "label", r#for: "name", "App name" }
-            input {
+            Label { html_for: "name", "App name" }
+            Input {
                 id: "name",
                 placeholder: "Mobius {account}",
                 value: name,
-                oninput: move |event| name.set(event.value()),
+                oninput: move |event: FormEvent| name.set(event.value()),
             }
             p { class: "muted small", "GitHub App names are unique on all of GitHub. Use a name that no other App has, for example with your account name." }
             div { class: "error", {error} }
-            button { class: "btn primary", r#type: "submit", "Create the App" }
+            Button { variant: ButtonVariant::Primary, r#type: "submit", "Create the App" }
         }
     }
 }

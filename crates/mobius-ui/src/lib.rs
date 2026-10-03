@@ -17,9 +17,9 @@ use mobius_api::{
     workstreams,
 };
 use mobius_domain::{
-    AgentNode, Author, ChatMessage, DrainEnd, FeedRow, InboxItem, InboxKind, LabelStatus, Live,
-    PAUSED, PermissionStatus, RepositoryCheckup, TaskLine, TranscriptLine, Workstream, agent_rows,
-    shown_agents,
+    ActiveAgent, AgentNode, Author, ChatMessage, DrainEnd, FeedRow, InboxItem, InboxKind,
+    LabelStatus, Live, PAUSED, PermissionStatus, RepositoryCheckup, TaskLine, TranscriptLine,
+    Workstream, agent_rows, shown_agents,
 };
 use time::UtcOffset;
 use time::macros::format_description;
@@ -1045,7 +1045,7 @@ fn NewWorkstream() -> Element {
 
 // All active agents of the server in one group for each role, of all organizations.
 // The resource runs again after a new live connection and when a `Live::Agent` event changes
-// `LiveState.agents`: at the start of a session, at the slot start, at a change of the queue reason, and at the end.
+// `LiveState.agents`: at the start of a session, at the slot start, at a change of the queue reason, when the pull request opens, and at the end.
 #[component]
 fn AgentsPage() -> Element {
     let state: LiveState = use_context();
@@ -1067,8 +1067,8 @@ fn AgentsPage() -> Element {
             for group in overview.groups.iter() {
                 div { key: "{group.name}", class: "label section", "{group.name} {group.count} / {group.max}" }
                 div { class: "list",
-                    for node in group.agents.iter() {
-                        AgentRow { key: "{node.session.id}", node: node.clone() }
+                    for agent in group.agents.iter() {
+                        AgentRow { key: "{agent.node.session.id}", agent: agent.clone() }
                     }
                 }
             }
@@ -1088,34 +1088,38 @@ fn AgentsPage() -> Element {
 }
 
 #[component]
-fn AgentRow(node: AgentNode) -> Element {
+fn AgentRow(agent: ActiveAgent) -> Element {
+    let node = &agent.node;
     let session = &node.session;
-    // The ticket of the session, or its Workstream, or only the org (the Triager chat of an org).
-    let target = match session.issue {
-        Some(issue) => format!("{}#{issue}", session.repository),
-        None if session.workstream != 0 => {
-            format!("{} Workstream #{}", session.repository, session.workstream)
-        }
-        None => String::new(),
+    let numbered = |number: i64, title: &Option<String>| match title {
+        Some(title) => format!("#{number} {title}"),
+        None => format!("#{number}"),
     };
-    let mut detail = format!("{} · {}", session.role, session.organization);
-    if !target.is_empty() {
-        detail.push_str(" · ");
-        detail.push_str(&target);
-    }
     rsx! {
         div { class: "item",
             span { class: if session.queue_reason.is_some() { "dot queued" } else { "dot live" } }
             div { class: "grow",
                 div { "{node.role} {node.title}" }
                 div { class: "muted small",
-                    "{detail}"
-                    if let Some(reason) = &node.session.queue_reason {
+                    "{session.role} · {session.organization}"
+                    if session.workstream != 0 || session.issue.is_some() {
+                        " · {session.repository}"
+                    }
+                    if let Some(reason) = &session.queue_reason {
                         " · {reason}"
                     }
                 }
+                if session.workstream != 0 {
+                    div { class: "muted small ellip", "Workstream {numbered(session.workstream, &agent.workstream_title)}" }
+                }
+                if let Some(issue) = session.issue {
+                    div { class: "muted small ellip", "Ticket {numbered(issue, &agent.issue_title)}" }
+                }
+                if let Some(pull_request) = agent.pull_request {
+                    div { class: "muted small", "Pull request #{pull_request}" }
+                }
             }
-            if let Some(reason) = &node.session.queue_reason {
+            if let Some(reason) = &session.queue_reason {
                 span { class: "chip warn",
                     if reason.starts_with(PAUSED) { "paused" } else { "queued" }
                 }

@@ -2,7 +2,7 @@ use std::error::Error;
 use std::path::Path;
 use std::pin::Pin;
 
-use mobius_domain::organization;
+use mobius_domain::{Live, organization};
 use mobius_github::{PullRequest, Repository};
 use mobius_runner::{Check, Session};
 use mobius_store::Task;
@@ -14,8 +14,8 @@ use crate::labels::{NEEDS_HUMAN_LABEL, WORKING_LABEL};
 use crate::lead::{self, Recorder};
 use crate::trust::{self, app_login};
 use crate::{
-    Engine, TIME_FORMAT, dispatch, ends, housekeeper, issues, lead_events, limits, mcp, reviewer,
-    threads, workers,
+    Engine, TIME_FORMAT, agents, dispatch, ends, housekeeper, issues, lead_events, limits, mcp,
+    reviewer, threads, workers,
 };
 
 pub(crate) const ROLE: &str = "implementer";
@@ -666,6 +666,8 @@ async fn implement(
                 .tasks()
                 .set_pull_request(job.task, pull_request.number)
                 .await?;
+            let open = engine.store.sessions().get(session_id).await?;
+            engine.broadcast(Live::Agent(agents::node(open)));
             pull_request
         }
     };

@@ -3212,6 +3212,7 @@ name = "mobius"
 version = "0.1.0"
 dependencies = [
  "dioxus",
+ "mobius-domain",
  "mobius-engine",
  "mobius-store",
  "mobius-ui",

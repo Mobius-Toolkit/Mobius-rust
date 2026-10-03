@@ -59,6 +59,7 @@ fn serve() {
         return runtime.block_on(init).unwrap_or_else(|error| fail(error));
     }
     let config = mobius_engine::config::load(&config_path).unwrap_or_else(|error| fail(error));
+    let _lock = lock_data_dir(&config.data_dir);
 
     let missing = mobius_engine::missing_commands(&config, &path);
     for program in &missing {
@@ -106,6 +107,29 @@ fn serve() {
                 .layer(Extension(store)))
         }
     });
+}
+
+// The descriptor must keep `O_CLOEXEC` (the `File` default). Then agent processes do not inherit it, and `exec` in the upgrade releases the lock for the new version.
+#[cfg(feature = "server")]
+fn lock_data_dir(data_dir: &std::path::Path) -> std::fs::File {
+    use std::fs::{self, File, TryLockError};
+
+    fs::create_dir_all(data_dir)
+        .unwrap_or_else(|error| fail(format!("{}: {error}", data_dir.display())));
+    let path = data_dir.join("mobius.lock");
+    let file = File::options()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .unwrap_or_else(|error| fail(format!("{}: {error}", path.display())));
+    match file.try_lock() {
+        Ok(()) => file,
+        Err(TryLockError::WouldBlock) => fail(format!(
+            "a Mobius server already uses the data directory {}",
+            data_dir.display()
+        )),
+        Err(TryLockError::Error(error)) => fail(format!("{}: {error}", path.display())),
+    }
 }
 
 #[cfg(feature = "server")]

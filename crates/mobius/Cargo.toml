@@ -15,4 +15,5 @@ web = ["dioxus/web"]
 server = ["dioxus/server", "mobius-ui/server", "dep:mobius-engine", "dep:mobius-store", "dep:tokio"]
 
 [dev-dependencies]
+mobius-domain = { workspace = true }
 tempfile = { workspace = true }

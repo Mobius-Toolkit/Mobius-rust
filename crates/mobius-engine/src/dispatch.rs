@@ -1,14 +1,17 @@
 use std::error::Error;
 
 use mobius_domain::InboxKind;
-use mobius_github::{Comment, Issue, IssueEvent, Repository};
+use mobius_github::{Comment, Issue, IssueEvent, PullRequest, Repository};
 use mobius_store::Task;
 use time::OffsetDateTime;
 
 use crate::config::Config;
 use crate::labels::{NEEDS_HUMAN_LABEL, NO_WORKSTREAM_LABEL, READY_LABEL, WORKING_LABEL};
-use crate::trust::{app_login, trusted_author};
-use crate::{Engine, TIME_FORMAT, activity, implementer, inbox, lead_events, triager, workstreams};
+use crate::trust::{self, app_login, trusted_author};
+use crate::{
+    Engine, TIME_FORMAT, activity, conflicts, implementer, inbox, issues, lead, lead_events,
+    reviewer, triager, workstreams,
+};
 
 pub(crate) const READY_CURSOR: &str = "ready";
 
@@ -43,6 +46,15 @@ pub(crate) async fn dispatch_ready(
             continue;
         }
         let live = engine.store.tasks().live(name, issue.number).await?;
+        if let Some(task) = live.as_ref().filter(|task| task.state == "needs_human") {
+            if actor.eq_ignore_ascii_case(&app_login(app_slug))
+                && !workstreams::autopilot(engine, repository, task.workstream).await?
+            {
+                continue;
+            }
+            resume(engine, repository, issue, task, actor).await?;
+            continue;
+        }
         if let Some(task) = live.as_ref().filter(|task| task.state != "stopped") {
             repository.remove_label(issue.number, READY_LABEL).await?;
             activity::add(
@@ -84,6 +96,116 @@ pub(crate) async fn dispatch_ready(
         .sync_cursors()
         .set(name, READY_CURSOR, None, page.etag.as_deref())
         .await
+}
+
+// `mobius:ready` goes off last, so a failure before the round starts leaves the issue in the ready list.
+async fn resume(
+    engine: &Engine,
+    repository: &Repository,
+    issue: &Issue,
+    task: &Task,
+    actor: &str,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let name = &repository.full_name;
+    let tasks = engine.store.tasks();
+    repository.add_label(issue.number, WORKING_LABEL).await?;
+    repository
+        .remove_label(issue.number, NEEDS_HUMAN_LABEL)
+        .await?;
+    tasks.reset_counters(task.id).await?;
+    let pull_request = match task.pull_request {
+        Some(number) => Some(repository.pull_request(number).await?),
+        None => None,
+    };
+    let conflict = pull_request.as_ref().is_some_and(|pull_request| {
+        pull_request.mergeable == Some(false) || conflicts::behind(pull_request)
+    });
+    let to = match (&pull_request, conflict) {
+        (Some(_), true) => "ready_for_review",
+        (Some(_), false) => "working",
+        (None, _) => "dispatched",
+    };
+    let parent = lead::newest_session(engine, name, task.workstream, issue.number).await?;
+    let items = match &pull_request {
+        Some(pull_request) if !conflict => continue_items(engine, repository, pull_request).await?,
+        _ => String::new(),
+    };
+    if !tasks.set_state(task.id, "needs_human", to).await? {
+        return Ok(());
+    }
+    let started = match pull_request {
+        Some(pull_request) if conflict => {
+            implementer::conflict_round(engine, repository, task, pull_request).await
+        }
+        Some(pull_request) => {
+            implementer::fix_round(
+                engine,
+                repository,
+                implementer::Round {
+                    repository: name.clone(),
+                    workstream: task.workstream,
+                    task: task.id,
+                    number: issue.number,
+                    title: issue.title.clone(),
+                    branch: task.branch.clone().unwrap_or_default(),
+                    pull_request,
+                    check_run: None,
+                    counts: true,
+                    items,
+                    parent,
+                },
+            )
+            .await
+        }
+        None => implementer::start(
+            engine,
+            repository,
+            task.workstream,
+            issue.number,
+            issue.body.as_deref().unwrap_or_default(),
+            parent,
+        )
+        .await
+        .map(|_| ()),
+    };
+    if let Err(error) = started {
+        tasks.set_state(task.id, to, "needs_human").await?;
+        return Err(error);
+    }
+    repository.remove_label(issue.number, READY_LABEL).await?;
+    activity::add(
+        engine,
+        name,
+        task.workstream,
+        issue.number,
+        actor,
+        &format!("Continued \"{}\"", issue.title),
+        &issue.html_url,
+    )
+    .await
+}
+
+async fn continue_items(
+    engine: &Engine,
+    repository: &Repository,
+    pull_request: &PullRequest,
+) -> Result<String, Box<dyn Error + Send + Sync>> {
+    let trusted = trust::trusted_authors(engine, repository);
+    let app_login = app_login(&repository.app_slug);
+    let open: Vec<i64> = repository
+        .review_threads(pull_request.number)
+        .await?
+        .iter()
+        .filter(|thread| reviewer::is_open(thread, &trusted, &app_login))
+        .map(|thread| thread.comment)
+        .collect();
+    if open.is_empty() {
+        return Ok(
+            "\nThe human continued the task. Finish the issue and make `.mobius/check` pass.\n"
+                .to_string(),
+        );
+    }
+    issues::fix_threads(repository, pull_request.number, &open, &trusted).await
 }
 
 // `mobius:working` goes on before `mobius:ready` goes off, so a failure between the two leaves the issue in the ready list.

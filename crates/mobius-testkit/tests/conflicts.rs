@@ -279,6 +279,66 @@ async fn a_stale_pull_request_with_a_merge_conflict_goes_to_a_human() {
 }
 
 #[tokio::test]
+async fn mobius_ready_on_a_task_in_needs_human_with_a_merge_conflict_starts_a_conflict_round_on_the_same_pull_request()
+ {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(
+        &data_dir,
+        &github,
+        NO_FINDING,
+        "[[prompts]]\nwhen = \"Merge the base branch and remove the conflicts.\"\nshell = \"git merge -q origin/main; echo cents > plan.txt && git add plan.txt && git commit -q --no-edit\"\n",
+    )
+    .await;
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    wait_for(async || (ready_for_review_events(&engine).await == 1).then_some(())).await;
+    github.set_created_at(REPOSITORY, 42, 0);
+    github.commit_file(REPOSITORY, "plan.txt", "dollars\n", "Use dollars");
+    wait_for(async || {
+        let labels = github.labels(REPOSITORY, 41);
+        (task_state(&engine, 41).await.as_deref() == Some("needs_human")
+            && labels.contains(&"mobius:needs-human".to_string()))
+        .then_some(())
+    })
+    .await;
+    let stopped = engine
+        .store
+        .tasks()
+        .live(REPOSITORY, 41)
+        .await
+        .unwrap()
+        .unwrap();
+    let remote = github.remote(REPOSITORY);
+    let first = git(&remote, &["rev-parse", "mobius/41"]);
+
+    github.remove_label(REPOSITORY, 41, "mobius:needs-human", "owner");
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    wait_for(async || (ready_for_review_events(&engine).await == 2).then_some(())).await;
+    let head = git(&remote, &["rev-parse", "mobius/41"]);
+    git(&remote, &["merge-base", "--is-ancestor", &first, &head]);
+    git(&remote, &["merge-base", "--is-ancestor", "main", &head]);
+    let task = engine
+        .store
+        .tasks()
+        .live(REPOSITORY, 41)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.id, stopped.id);
+    assert_eq!(task.pull_request, stopped.pull_request);
+    assert_eq!(github.pull_requests(REPOSITORY).len(), 1);
+    assert_eq!(sessions(&engine, "implementer").await.len(), 2);
+    let labels = github.labels(REPOSITORY, 41);
+    assert!(labels.contains(&"mobius:working".to_string()), "{labels:?}");
+    assert!(!labels.contains(&"mobius:ready".to_string()), "{labels:?}");
+    assert!(
+        !labels.contains(&"mobius:needs-human".to_string()),
+        "{labels:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_conflict_round_that_does_not_merge_the_base_branch_stops_the_task() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;

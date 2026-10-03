@@ -3280,6 +3280,7 @@ dependencies = [
  "mobius-engine",
  "mobius-store",
  "mobius-ui",
+ "tempfile",
  "tokio",
 ]
 

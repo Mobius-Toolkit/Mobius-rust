@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use dioxus::server::axum::Extension;
-use mobius_engine::{Engine, auth, github, workstreams};
+use mobius_engine::{Engine, auth, github, tasks, workstreams};
 use mobius_testkit::fake_github::FakeGitHub;
 use mobius_testkit::{start, wait_for};
 use serde_json::json;
@@ -25,8 +25,13 @@ async fn connect(data_dir: &TempDir, github: &FakeGitHub) -> Engine {
     engine
 }
 
-// POSTs to the server function endpoint the same way as the web client of the task tab.
-async fn task_list(engine: &Engine, token: &str, repository: &str, workstream: i64) -> String {
+// POSTs to a server function endpoint the same way as the web client.
+async fn post(
+    engine: &Engine,
+    token: Option<&str>,
+    path: &str,
+    body: serde_json::Value,
+) -> (StatusCode, String) {
     // `router` serves the web bundle of a `dx` build from DIOXUS_PUBLIC_PATH; a test has none.
     // The variable is global to the process, so it points to one directory that no test deletes.
     PUBLIC_PATH.call_once(|| {
@@ -36,23 +41,31 @@ async fn task_list(engine: &Engine, token: &str, repository: &str, workstream: i
     let router = dioxus::server::router(mobius_ui::App)
         .layer(Extension(engine.clone()))
         .layer(Extension(engine.store.clone()));
+    let mut request = Request::post(path).header("content-type", "application/json");
+    if let Some(token) = token {
+        request = request.header("cookie", format!("mobius_session={token}"));
+    }
     let response = router
-        .oneshot(
-            Request::post("/api/tasks")
-                .header("content-type", "application/json")
-                .header("cookie", format!("mobius_session={token}"))
-                .body(Body::from(
-                    json!({ "repository": repository, "workstream": workstream }).to_string(),
-                ))
-                .unwrap(),
-        )
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    String::from_utf8(body.to_vec()).unwrap()
+    (status, String::from_utf8(body.to_vec()).unwrap())
+}
+
+async fn task_list(engine: &Engine, token: &str, repository: &str, workstream: i64) -> String {
+    let (status, body) = post(
+        engine,
+        Some(token),
+        "/api/tasks",
+        json!({ "repository": repository, "workstream": workstream }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    body
 }
 
 #[tokio::test]
@@ -225,4 +238,126 @@ async fn the_task_tab_shows_the_sub_issues_of_a_closed_task_at_their_own_depth()
         ]),
         "{body}"
     );
+}
+
+#[tokio::test]
+async fn the_needs_human_list_has_the_open_issues_with_the_label_in_the_whole_tree() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(&data_dir, &github).await;
+    github.add_issue(REPOSITORY, 41, "Add plan model");
+    github.add_sub_issue(REPOSITORY, 12, 41);
+    github.add_label(REPOSITORY, 41, "mobius:needs-human", "owner");
+    // The task keeps working while it asks, so `mobius:working` comes first.
+    github.add_issue(REPOSITORY, 50, "Store the price in cents");
+    github.add_sub_issue(REPOSITORY, 41, 50);
+    github.add_label(REPOSITORY, 50, "mobius:working", "owner");
+    github.add_label(REPOSITORY, 50, "mobius:needs-human", "owner");
+    github.add_issue(REPOSITORY, 42, "Let customers change plans");
+    github.add_sub_issue(REPOSITORY, 12, 42);
+    github.add_label(REPOSITORY, 42, "mobius:working", "owner");
+    github.add_issue(REPOSITORY, 43, "Add season table");
+    github.add_sub_issue(REPOSITORY, 12, 43);
+    github.add_label(REPOSITORY, 43, "mobius:needs-human", "owner");
+    github.close_issue(REPOSITORY, 43);
+    let pull_request = github.open_pull_request(REPOSITORY, "Add plan model", "mobius/41");
+    let task = engine.store.tasks().add(REPOSITORY, 41, 12).await.unwrap();
+    engine
+        .store
+        .tasks()
+        .set_pull_request(task.id, pull_request)
+        .await
+        .unwrap();
+    let token = auth::login(&engine, "correct horse", "test")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (status, body) = post(
+        &engine,
+        Some(&token),
+        "/api/tasks/needs-human",
+        json!({ "repository": REPOSITORY, "workstream": 12 }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let issues: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        issues,
+        json!([
+            {
+                "number": 41,
+                "title": "Add plan model",
+                "url": "https://github.com/owner/shop/issues/41",
+                "pull_request": pull_request,
+                "pull_request_url": format!("https://github.com/owner/shop/pull/{pull_request}")
+            },
+            {
+                "number": 50,
+                "title": "Store the price in cents",
+                "url": "https://github.com/owner/shop/issues/50",
+                "pull_request": null,
+                "pull_request_url": null
+            }
+        ]),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn the_needs_human_workstreams_have_each_a_task_with_the_label() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(&data_dir, &github).await;
+    github.add_issue(REPOSITORY, 41, "Add plan model");
+    github.add_sub_issue(REPOSITORY, 12, 41);
+    github.add_issue(REPOSITORY, 42, "Let customers change plans");
+    github.add_sub_issue(REPOSITORY, 41, 42);
+    github.add_label(REPOSITORY, 42, "mobius:needs-human", "owner");
+    github.add_issue(REPOSITORY, 13, "Add a storefront");
+    github.add_label(REPOSITORY, 13, "mobius:workstream", "owner");
+    github.add_issue(REPOSITORY, 43, "Add season table");
+    github.add_sub_issue(REPOSITORY, 13, 43);
+    github.add_issue(REPOSITORY, 44, "Add price table");
+    github.add_sub_issue(REPOSITORY, 13, 44);
+    github.add_label(REPOSITORY, 44, "mobius:needs-human", "owner");
+    github.close_issue(REPOSITORY, 44);
+
+    let workstreams = tasks::needs_human_workstreams(&engine).await.unwrap();
+
+    assert_eq!(workstreams, [(REPOSITORY.to_string(), 12)]);
+}
+
+#[tokio::test]
+async fn resume_removes_the_needs_human_label_and_adds_the_ready_label_as_the_owner() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(&data_dir, &github).await;
+    github.add_user_code("user-code", "owner");
+    assert!(github::authorize_user(&engine, "user-code").await.unwrap());
+    github.add_issue(REPOSITORY, 41, "Add plan model");
+    github.add_sub_issue(REPOSITORY, 12, 41);
+    github.add_label(REPOSITORY, 41, "mobius:needs-human", "mobius-test[bot]");
+    let token = auth::login(&engine, "correct horse", "test")
+        .await
+        .unwrap()
+        .unwrap();
+    let body = json!({ "repository": REPOSITORY, "issue": 41 });
+
+    let (status, _) = post(&engine, None, "/api/tasks/resume", body.clone()).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(github.labels(REPOSITORY, 41), ["mobius:needs-human"]);
+
+    let (status, response) = post(&engine, Some(&token), "/api/tasks/resume", body).await;
+
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(github.labels(REPOSITORY, 41), ["mobius:ready"]);
+    for label in ["mobius:needs-human", "mobius:ready"] {
+        assert_eq!(
+            github.label_actor(REPOSITORY, 41, label).as_deref(),
+            Some("owner")
+        );
+    }
 }

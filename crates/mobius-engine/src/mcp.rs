@@ -657,7 +657,7 @@ impl Handler {
                     self.caller.workstream,
                     n,
                     &instructions,
-                    self.caller.session,
+                    Some(self.caller.session),
                 )
                 .await
             }

@@ -13,3 +13,6 @@ tokio = { workspace = true, optional = true }
 [features]
 web = ["dioxus/web"]
 server = ["dioxus/server", "mobius-ui/server", "dep:mobius-engine", "dep:mobius-store", "dep:tokio"]
+
+[dev-dependencies]
+tempfile = { workspace = true }

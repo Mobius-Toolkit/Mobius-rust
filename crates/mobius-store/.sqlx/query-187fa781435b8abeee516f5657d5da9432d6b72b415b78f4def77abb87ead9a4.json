@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT repository, workstream, position FROM copied_issues\n             WHERE number = ? AND repository_url = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "repository",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "copied_issues",
+            "name": "repository"
+          }
+        }
+      },
+      {
+        "name": "workstream",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "copied_issues",
+            "name": "workstream"
+          }
+        }
+      },
+      {
+        "name": "position",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "copied_issues",
+            "name": "position"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "187fa781435b8abeee516f5657d5da9432d6b72b415b78f4def77abb87ead9a4"
+}

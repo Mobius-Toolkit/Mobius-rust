@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 
-use mobius_domain::{ActiveAgents, AgentGroup, AgentNode, Session, organization};
+use mobius_domain::{ActiveAgent, ActiveAgents, AgentGroup, AgentNode, Session, organization};
 
 use crate::workers::Role;
 use crate::{Engine, chat, triager};
@@ -28,15 +28,21 @@ pub async fn groups(engine: &Engine) -> Result<ActiveAgents, Box<dyn Error + Sen
     let sessions = engine.store.sessions().open().await?;
     // The slot counts match the counts of `workers::reason`: a session holds a slot while it is open and not queued.
     let mut running: BTreeMap<Role, u32> = BTreeMap::new();
-    let mut agents: BTreeMap<Role, Vec<AgentNode>> = BTreeMap::new();
-    for session in sessions {
+    let mut agents: BTreeMap<Role, Vec<ActiveAgent>> = BTreeMap::new();
+    for open in sessions {
+        let session = open.session;
         let Some(role) = Role::of_session(&session.role) else {
             continue;
         };
         if session.queue_reason.is_none() {
             *running.entry(role).or_default() += 1;
         }
-        agents.entry(role).or_default().push(node(session));
+        agents.entry(role).or_default().push(ActiveAgent {
+            node: node(session),
+            workstream_title: open.workstream_title,
+            issue_title: open.issue_title,
+            pull_request: open.pull_request,
+        });
     }
     let config = &engine.config;
     let count = running

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE copied_workstreams SET title = ?1, body = ?2, autopilot = ?3\n             WHERE repository = ?4 AND number = ?5\n               AND (title != ?1 OR body != ?2 OR autopilot != ?3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "65888290f84ac0d9f2d24eb4a817e82b4dc978743e7008c09adf57634794cd14"
+}

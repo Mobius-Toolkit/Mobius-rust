@@ -271,6 +271,25 @@ async fn the_close_of_a_sub_issue_goes_live_as_a_workstream_change() {
 }
 
 #[tokio::test]
+async fn the_needs_human_label_on_a_nested_task_goes_live_as_a_workstream_change() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(&data_dir, &github).await;
+    workstream_with_task(&engine, &github).await;
+    github.add_issue(REPOSITORY, 43, "Price table");
+    github.add_sub_issue(REPOSITORY, 41, 43);
+    let mut feed = activity::feed(&engine, None).await.unwrap();
+    wait_until_quiet(&mut feed).await;
+    github.add_label(REPOSITORY, 43, "mobius:needs-human", "mobius[bot]");
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !matches!(feed.next().await, Some(Live::Workstreams)) {}
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn a_completion_closes_the_workstream_issue_and_leaves_the_list() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;

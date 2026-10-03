@@ -171,6 +171,24 @@ async fn seed(engine: &Engine, github: &FakeGitHub) {
     github.add_label(REPOSITORY, 42, "mobius:ready", "owner");
     wait_for(async || (!inbox::list(engine).await.unwrap().is_empty()).then_some(())).await;
 
+    let pull_request = github.open_pull_request(REPOSITORY, "Add plan model", "mobius/41");
+    let task = engine
+        .store
+        .tasks()
+        .live(REPOSITORY, 41)
+        .await
+        .unwrap()
+        .unwrap();
+    engine
+        .store
+        .tasks()
+        .set_pull_request(task.id, pull_request)
+        .await
+        .unwrap();
+    for number in [41, 42] {
+        github.add_label(REPOSITORY, number, "mobius:needs-human", "owner");
+    }
+
     // The event entries of the labels hold the time of the run, so the screenshots keep only the fixed event entry.
     sqlx::query("DELETE FROM chat_messages WHERE author = 'Event'")
         .execute(&engine.store.pool)
@@ -1170,7 +1188,7 @@ async fn screenshots() {
                 name: "workstreams",
                 path: "/workstreams",
                 clicks: &[],
-                expected: "Integrate loyalty plans",
+                expected: "needs you",
                 inbox_count: true,
             },
             Shot {
@@ -1191,7 +1209,7 @@ async fn screenshots() {
                 name: "chat",
                 path: "/workstreams/owner/shop/12",
                 clicks: &[],
-                expected: "#42 waits for your decision.",
+                expected: "Resume",
                 inbox_count: true,
             },
             Shot {
@@ -1233,7 +1251,7 @@ async fn screenshots() {
                 name: "agents",
                 path: "/agents",
                 clicks: &[],
-                expected: "owner/shop#41",
+                expected: "Ticket #41",
                 inbox_count: true,
             },
             Shot {
@@ -1657,5 +1675,133 @@ async fn the_open_chat_shows_the_messages_that_arrived_while_the_connection_was_
     })
     .await;
     page.close().await.unwrap();
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "starts Chrome and serves the web bundle in DIOXUS_PUBLIC_PATH"]
+async fn resume_takes_the_issue_off_the_list_and_the_hint_goes_away() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    github.add_manifest_code("manifest-code");
+    github.add_user_code("user-code", "owner");
+    install_fake_harness(data_dir.path(), FAKE_AGENT, "claude-agent-acp", CLAUDE);
+    install_fake_harness(data_dir.path(), FAKE_AGENT, "devin", IMPLEMENTER);
+    let engine = start(data_dir.path(), "correct horse", &github.url).await;
+    let url = serve_ui(&engine).await;
+    github::convert_manifest(&engine, "manifest-code")
+        .await
+        .unwrap();
+    assert!(github::authorize_user(&engine, "user-code").await.unwrap());
+    github.add_repository(REPOSITORY);
+    github.add_issue(REPOSITORY, 12, "Desktop plans");
+    github.add_label(REPOSITORY, 12, "mobius:workstream", "owner");
+    wait_for(async || (workstreams::list(&engine).await.unwrap().len() == 1).then_some(())).await;
+    let (mut browser, mut handler) = Browser::launch(
+        BrowserConfig::builder()
+            .launch_timeout(Duration::from_secs(60))
+            .no_sandbox()
+            .arg("--hide-scrollbars")
+            .build()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    tokio::spawn(async move { while handler.next().await.is_some() {} });
+    log_in(&browser, &format!("{url}/github")).await;
+    for (viewport, first, second) in [(DESKTOP, 41, 42), (PHONE, 43, 44)] {
+        github.add_issue(
+            REPOSITORY,
+            first,
+            "Add plan model with a long title that wraps on the phone",
+        );
+        github.add_issue(REPOSITORY, second, "Let customers change plans");
+        for number in [first, second] {
+            github.add_sub_issue(REPOSITORY, 12, number);
+            github.add_label(REPOSITORY, number, "mobius:needs-human", "owner");
+        }
+        let page = open(
+            &browser,
+            &format!("{url}/workstreams/owner/shop/12"),
+            viewport,
+        )
+        .await;
+        wait_until_ready(&page, "Resume", false).await;
+        wait_until_live(&page).await;
+        // The list sits directly above the composer and fits the screen.
+        assert!(
+            check(
+                &page,
+                "(() => { const list = document.querySelector('.chat > .needs-human');\
+                 const box = list.getBoundingClientRect();\
+                 const buttons = [...list.querySelectorAll('button')].map(b => b.getBoundingClientRect());\
+                 return list.nextElementSibling === document.querySelector('.chat > .composer')\
+                 && list.querySelectorAll('.item').length === 2\
+                 && box.left >= 0 && box.right <= window.innerWidth\
+                 && buttons.every(b => b.left >= 0 && b.right <= window.innerWidth)\
+                 && list.scrollWidth <= list.clientWidth; })()"
+                    .to_string()
+            )
+            .await
+        );
+        let hint = "[...document.querySelectorAll('a.entry .chip.warn')].length";
+        wait_for(async || check(&page, format!("{hint} === 1")).await.then_some(())).await;
+
+        assert!(
+            check(
+                &page,
+                "(() => { document.querySelector('.needs-human .item button').click(); return true; })()"
+                    .to_string()
+            )
+            .await
+        );
+        wait_for(async || {
+            check(
+                &page,
+                "document.querySelectorAll('.needs-human .item').length === 1".to_string(),
+            )
+            .await
+            .then_some(())
+        })
+        .await;
+        assert!(check(&page, format!("{hint} === 1")).await);
+        wait_for(async || {
+            engine
+                .store
+                .tasks()
+                .live(REPOSITORY, first)
+                .await
+                .unwrap()
+                .map(|_| ())
+        })
+        .await;
+
+        assert!(
+            check(
+                &page,
+                "(() => { document.querySelector('.needs-human .item button').click(); return true; })()"
+                    .to_string()
+            )
+            .await
+        );
+        wait_for(async || {
+            check(&page, "!document.querySelector('.needs-human')".to_string())
+                .await
+                .then_some(())
+        })
+        .await;
+        wait_for(async || check(&page, format!("{hint} === 0")).await.then_some(())).await;
+        wait_for(async || {
+            engine
+                .store
+                .tasks()
+                .live(REPOSITORY, second)
+                .await
+                .unwrap()
+                .map(|_| ())
+        })
+        .await;
+        page.close().await.unwrap();
+    }
     browser.close().await.unwrap();
 }

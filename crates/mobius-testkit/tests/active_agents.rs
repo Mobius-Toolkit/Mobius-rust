@@ -1,5 +1,6 @@
-use mobius_domain::ActiveAgents;
+use mobius_domain::{ActiveAgents, Harness};
 use mobius_engine::{Engine, agents, chat, github, workstreams};
+use mobius_store::NewSession;
 use mobius_testkit::fake_github::FakeGitHub;
 use mobius_testkit::{install_fake_harness, start_with, wait_for};
 use tempfile::TempDir;
@@ -117,7 +118,7 @@ async fn the_page_counts_the_open_sessions_of_each_role_against_its_limit() {
     );
 
     // The Lead chat shows its Workstream.
-    let lead = &overview.groups[0].agents[0];
+    let lead = &overview.groups[0].agents[0].node;
     assert_eq!(
         (lead.role.as_str(), lead.title.as_str()),
         ("Lead", "chat session")
@@ -129,17 +130,86 @@ async fn the_page_counts_the_open_sessions_of_each_role_against_its_limit() {
     assert_eq!(lead.session.queue_reason, None);
 
     // The Implementer shows its issue.
-    let implementer = &overview.groups[2].agents[0];
+    let implementer = &overview.groups[2].agents[0].node;
     assert_eq!(implementer.session.role, "implementer");
     assert_eq!(implementer.session.organization, "owner");
     assert_eq!(implementer.session.repository, REPOSITORY);
     assert_eq!(implementer.session.issue, Some(41));
 
     // The Researcher shows its Workstream.
-    let researcher = &overview.groups[3].agents[0];
+    let researcher = &overview.groups[3].agents[0].node;
     assert_eq!(researcher.session.role, "researcher");
     assert_eq!(researcher.session.organization, "owner");
     assert_eq!(researcher.session.repository, REPOSITORY);
     assert_eq!(researcher.session.workstream, 12);
     assert_eq!(researcher.session.issue, None);
+}
+
+#[tokio::test]
+async fn each_row_shows_the_workstream_the_ticket_and_the_pull_request_when_they_exist() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(&data_dir, &github).await;
+    let new_session = |role, harness, workstream, issue| NewSession {
+        role,
+        harness,
+        model: "model",
+        organization: "owner",
+        repository: if workstream == 0 { "" } else { REPOSITORY },
+        workstream,
+        issue,
+        parent: None,
+    };
+    let sessions = engine.store.sessions();
+    sessions
+        .add(new_session("implementer", Harness::Devin, 12, Some(41)))
+        .await
+        .unwrap();
+    sessions
+        .add(new_session("researcher", Harness::Antigravity, 12, None))
+        .await
+        .unwrap();
+    sessions
+        .add(new_session("triager", Harness::ClaudeCode, 0, None))
+        .await
+        .unwrap();
+    let task = engine.store.tasks().add(REPOSITORY, 41, 12).await.unwrap();
+
+    let overview = wait_for(async || {
+        let overview = overview(&engine).await;
+        overview.groups[2].agents[0]
+            .issue_title
+            .is_some()
+            .then_some(overview)
+    })
+    .await;
+    let row = |group: usize| {
+        let agent = &overview.groups[group].agents[0];
+        (
+            agent.workstream_title.as_deref(),
+            agent.issue_title.as_deref(),
+            agent.pull_request,
+        )
+    };
+    assert_eq!(
+        row(2),
+        (
+            Some("Integrate loyalty plans"),
+            Some("Add plan model"),
+            None
+        )
+    );
+    assert_eq!(row(3), (Some("Integrate loyalty plans"), None, None));
+    assert_eq!(row(1), (None, None, None));
+
+    engine
+        .store
+        .tasks()
+        .set_pull_request(task.id, 42)
+        .await
+        .unwrap();
+    assert_eq!(
+        self::overview(&engine).await.groups[2].agents[0].pull_request,
+        Some(42)
+    );
 }

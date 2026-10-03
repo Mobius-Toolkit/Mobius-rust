@@ -376,6 +376,55 @@ async fn a_ready_label_on_an_issue_with_a_live_task_has_no_effect() {
 }
 
 #[tokio::test]
+async fn a_ready_label_on_an_issue_with_a_task_in_working_has_no_effect() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(&data_dir, &github, SEEN).await;
+    add_task_issue(&github, 12, 41, "Add plan model");
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    live_workstream(&engine, 41).await;
+    let task = engine
+        .store
+        .tasks()
+        .live(REPOSITORY, 41)
+        .await
+        .unwrap()
+        .unwrap();
+    engine
+        .store
+        .tasks()
+        .queue(task.id, "dispatched")
+        .await
+        .unwrap();
+    engine
+        .store
+        .tasks()
+        .set_state(task.id, "queued", "working")
+        .await
+        .unwrap();
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    wait_for(async || {
+        feed_texts(&engine)
+            .await
+            .contains(&"No effect: \"Add plan model\" has a live task".to_string())
+            .then_some(())
+    })
+    .await;
+    assert_eq!(github.labels(REPOSITORY, 41), ["mobius:working"]);
+    let live = engine
+        .store
+        .tasks()
+        .live(REPOSITORY, 41)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(live.id, task.id);
+    assert_eq!(live.state, "working");
+}
+
+#[tokio::test]
 async fn only_a_comment_of_a_trusted_user_on_a_working_issue_is_an_event() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;

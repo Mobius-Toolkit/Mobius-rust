@@ -2061,8 +2061,8 @@ fn NeedsHumanList(repository: String, number: i64) -> Element {
                         if let (Some(number), Some(url)) = (issue.pull_request, issue.pull_request_url) {
                             a { href: "{url}", target: "_blank", "PR #{number}" }
                         }
-                        button {
-                            class: "btn primary",
+                        Button {
+                            variant: ButtonVariant::Primary,
                             onclick: {
                                 let repository = repository.clone();
                                 move |_| {

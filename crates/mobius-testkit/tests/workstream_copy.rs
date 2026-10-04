@@ -989,3 +989,53 @@ async fn a_sub_issue_link_that_removes_a_blocker_from_its_workstream_changes_the
 
     wait_for(async || (blockers(&engine).await == [(42, 60, None, None)]).then_some(())).await;
 }
+
+#[tokio::test]
+async fn a_sub_issue_link_that_moves_a_closed_task_moves_its_open_sub_issue_in_the_copy() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    github.close_issue(REPOSITORY, 41);
+    wait_for(async || {
+        issues(&engine)
+            .await
+            .iter()
+            .any(|row| (row.1, row.3.as_str()) == (41, "closed"))
+            .then_some(())
+    })
+    .await;
+
+    github.remove_sub_issue(REPOSITORY, 12, 41);
+    github.add_sub_issue(REPOSITORY, 13, 41);
+
+    wait_for(async || {
+        let rows: Vec<(i64, i64)> = issues(&engine)
+            .await
+            .iter()
+            .map(|row| (row.0, row.1))
+            .collect();
+        (rows == [(12, 42), (13, 60), (13, 41), (13, 50)]).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_sub_issue_link_of_a_closed_issue_adds_the_issue_to_the_copy() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    let since = issues_cursor(&engine).await;
+    github.close_issue(REPOSITORY, 70);
+    wait_for_poll_after(&engine, since).await;
+
+    github.add_sub_issue(REPOSITORY, 13, 70);
+
+    wait_for(async || {
+        issues(&engine)
+            .await
+            .iter()
+            .any(|row| (row.0, row.1, row.3.as_str()) == (13, 70, "closed"))
+            .then_some(())
+    })
+    .await;
+}

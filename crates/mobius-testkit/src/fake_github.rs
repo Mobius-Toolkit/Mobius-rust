@@ -2082,6 +2082,7 @@ fn open_issue_links(records: &Records, repository: &str) -> Response {
             json!({
                 "number": number,
                 "parent": parent.map(|((_, parent), _)| node(*parent)),
+                "subIssuesSummary": { "total": issue.sub_issues.len() },
                 "blockedBy": { "nodes": blockers }
             })
         })

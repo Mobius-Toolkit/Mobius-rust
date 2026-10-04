@@ -32,7 +32,8 @@ pub(crate) async fn sync(
 // Reads again the trees that have a sub-issue link or a blocker link that is different from the links of the last sync or `relink`.
 // GitHub can change a link with no change of `updated_at`, so the `since` poll does not see it.
 // A new or reopened issue has no row in a tree, but the tree of its parent has a new row.
-// A closed issue does not change a tree, because the `since` poll shows it.
+// The number of sub-issues of a parent shows a link of a closed issue, which the query of the links does not read.
+// Two moves in opposite directions that keep the number of sub-issues of each parent show after the next full sync.
 // A moved issue and its descendants get another Workstream, which the blocker rows of the other trees store.
 pub(crate) async fn relink(
     engine: &Engine,
@@ -59,9 +60,14 @@ pub(crate) async fn relink(
     }
     let mut moved = BTreeSet::new();
     for workstream in &stale {
-        moved.extend(copy.issue_numbers(name, *workstream).await?);
+        let old: BTreeSet<i64> = copy
+            .issue_numbers(name, *workstream)
+            .await?
+            .into_iter()
+            .collect();
         let issues = tree(repository, *workstream).await?;
-        moved.extend(issues.iter().map(|issue| issue.number));
+        let new: BTreeSet<i64> = issues.iter().map(|issue| issue.number).collect();
+        moved.extend(old.symmetric_difference(&new));
         copy.replace_issues(name, *workstream, &issues).await?;
     }
     let mut blocked_trees = BTreeSet::new();

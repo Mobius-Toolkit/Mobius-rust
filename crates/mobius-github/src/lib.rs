@@ -238,6 +238,8 @@ pub struct ReviewThread {
 #[derive(Clone, PartialEq)]
 pub struct IssueLinks {
     pub parent: Option<i64>,
+    // The number of sub-issues, open and closed, in all repositories.
+    pub sub_issues: i64,
     pub blockers: BTreeSet<i64>,
 }
 
@@ -1183,6 +1185,7 @@ impl Repository {
                                 nodes {
                                     number
                                     parent { number repository { nameWithOwner } }
+                                    subIssuesSummary { total }
                                     blockedBy(first: 50) {
                                         nodes { number state repository { nameWithOwner } }
                                     }
@@ -1211,9 +1214,16 @@ impl Repository {
                     .filter(|blocker| blocker["state"] == "OPEN" && in_repository(blocker))
                     .filter_map(|blocker| blocker["number"].as_i64())
                     .collect();
+                let sub_issues = node["subIssuesSummary"]["total"]
+                    .as_i64()
+                    .ok_or("GitHub gave no sub-issue total.")?;
                 links.insert(
                     node["number"].as_i64().ok_or("GitHub gave no number.")?,
-                    IssueLinks { parent, blockers },
+                    IssueLinks {
+                        parent,
+                        sub_issues,
+                        blockers,
+                    },
                 );
             }
             if page["pageInfo"]["hasNextPage"] != true {

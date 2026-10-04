@@ -258,6 +258,7 @@ pub(crate) async fn comment_events(
     repository: &Repository,
     issue: &Issue,
     since: Option<OffsetDateTime>,
+    until: Option<OffsetDateTime>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let name = &repository.full_name;
     let Some(task) = engine.store.tasks().live(name, issue.number).await? else {
@@ -266,11 +267,12 @@ pub(crate) async fn comment_events(
     let comments = repository.issue_comments(issue.number).await?;
     let authors = comments
         .iter()
+        .filter(|comment| until.is_none_or(|until| comment.created_at <= until))
         .map(|comment| (comment.user.login.as_str(), comment.created_at));
     if new_trusted_user_comment(&engine.config, authors, since) {
         engine.store.tasks().reset_counters(task.id).await?;
     }
-    let (replies, answered) = replies(&engine.config, app_slug, &comments, since);
+    let (replies, answered) = replies(&engine.config, app_slug, &comments, since, until);
     if answered && task.state != "needs_human" && issue.has_label(NEEDS_HUMAN_LABEL) {
         repository
             .remove_label(issue.number, NEEDS_HUMAN_LABEL)
@@ -340,12 +342,14 @@ fn new_trusted_user_comment<'a>(
     })
 }
 
+// A comment after `until` came after the list of issues. The next poll reads it, because its cursor is `until`.
 // Gives the new comments that are Lead events. The `bool` is `true` when the newest of them is newer than the last comment of the Mobius App, the question.
 fn replies<'a>(
     config: &Config,
     app_slug: &str,
     comments: &'a [Comment],
     since: Option<OffsetDateTime>,
+    until: Option<OffsetDateTime>,
 ) -> (Vec<&'a Comment>, bool) {
     let asked_at = comments
         .iter()
@@ -361,6 +365,7 @@ fn replies<'a>(
         .iter()
         .filter(|comment| {
             since.is_none_or(|since| comment.created_at > since)
+                && until.is_none_or(|until| comment.created_at <= until)
                 && comment_is_event(config, app_slug, comment)
         })
         .collect();
@@ -744,7 +749,7 @@ judge       = { harness = "claude-code", model = "haiku",   effort = "low" }
             comment_at("owner", 3),
         ];
 
-        let (replies, answered) = replies(&config(), "mobius-app", &comments, None);
+        let (replies, answered) = replies(&config(), "mobius-app", &comments, None, None);
 
         assert_eq!(replies.len(), 2);
         assert!(answered);
@@ -758,7 +763,7 @@ judge       = { harness = "claude-code", model = "haiku",   effort = "low" }
             comment_at("mallory", 3),
         ];
 
-        let (replies, answered) = replies(&config(), "mobius-app", &comments, None);
+        let (replies, answered) = replies(&config(), "mobius-app", &comments, None, None);
 
         assert_eq!(replies.len(), 1);
         assert!(!answered);
@@ -769,11 +774,26 @@ judge       = { harness = "claude-code", model = "haiku",   effort = "low" }
         let comments = [comment_at("owner", 1), comment_at("owner", 3)];
         let since = OffsetDateTime::from_unix_timestamp(2).ok();
 
-        let (replies, answered) = replies(&config(), "mobius-app", &comments, since);
+        let (replies, answered) = replies(&config(), "mobius-app", &comments, since, None);
 
         assert_eq!(replies.len(), 1);
         assert_eq!(replies[0].created_at.unix_timestamp(), 3);
         assert!(answered);
+    }
+
+    #[test]
+    fn a_question_after_the_end_of_the_poll_keeps_the_reply_before_it_unanswered() {
+        let comments = [
+            comment_at("mobius-app[bot]", 1),
+            comment_at("owner", 2),
+            comment_at("mobius-app[bot]", 4),
+        ];
+        let until = OffsetDateTime::from_unix_timestamp(3).ok();
+
+        let (replies, answered) = replies(&config(), "mobius-app", &comments, None, until);
+
+        assert_eq!(replies.len(), 1);
+        assert!(!answered);
     }
 
     #[test]

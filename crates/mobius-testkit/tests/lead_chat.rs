@@ -1117,7 +1117,14 @@ async fn a_held_event_stays_held_after_a_restart_until_a_turn_for_an_owner_messa
         let store = Store::open(data_dir.path()).await.unwrap();
         let events = store.lead_events();
         events
-            .add(REPOSITORY, 12, Some(41), "comment", "A held comment.", None)
+            .add(
+                "owner",
+                REPOSITORY,
+                12,
+                Some(41),
+                "comment",
+                "A held comment.",
+            )
             .await
             .unwrap();
         let id = events.undelivered(REPOSITORY, 12).await.unwrap()[0].id;

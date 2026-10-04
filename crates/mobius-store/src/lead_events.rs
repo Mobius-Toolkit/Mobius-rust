@@ -1,7 +1,10 @@
 use std::error::Error;
 
+use mobius_domain::{Author, ChatMessage};
 use sqlx::sqlite::SqlitePool;
 use time::OffsetDateTime;
+
+use crate::chat_messages;
 
 pub struct LeadEvents<'a> {
     pub(crate) pool: &'a SqlitePool,
@@ -17,16 +20,27 @@ pub struct LeadEvent {
 }
 
 impl LeadEvents<'_> {
+    // The chat entry and the event go in together, so a reader sees both or none.
     pub async fn add(
         &self,
+        organization: &str,
         repository: &str,
         workstream: i64,
         issue: Option<i64>,
         kind: &str,
         payload: &str,
-        chat_message: Option<i64>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<ChatMessage, Box<dyn Error + Send + Sync>> {
         let time = OffsetDateTime::now_utc();
+        let mut transaction = self.pool.begin().await?;
+        let message = chat_messages::insert(
+            &mut *transaction,
+            organization,
+            repository,
+            workstream,
+            Author::Event,
+            payload,
+        )
+        .await?;
         sqlx::query!(
             "INSERT INTO lead_events (repository, workstream, issue, kind, payload, time, chat_message) VALUES (?, ?, ?, ?, ?, ?, ?)",
             repository,
@@ -35,11 +49,12 @@ impl LeadEvents<'_> {
             kind,
             payload,
             time,
-            chat_message
+            message.id
         )
-        .execute(self.pool)
+        .execute(&mut *transaction)
         .await?;
-        Ok(())
+        transaction.commit().await?;
+        Ok(message)
     }
 
     pub async fn waiting_workstreams(

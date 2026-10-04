@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use mobius_domain::{Author, InboxKind, Live, organization};
+use mobius_domain::{InboxKind, Live, organization};
 use mobius_runner::Session;
 use mobius_store::NewInboxItem;
 use serde_json::Value;
@@ -20,25 +20,14 @@ pub(crate) async fn add(
     let _order = engine.chat_order.lock().await;
     let message = engine
         .store
-        .chat_messages()
-        .add(
-            organization(repository),
-            repository,
-            workstream,
-            Author::Event,
-            payload,
-        )
-        .await?;
-    engine
-        .store
         .lead_events()
         .add(
+            organization(repository),
             repository,
             workstream,
             issue,
             kind,
             payload,
-            Some(message.id),
         )
         .await?;
     engine.broadcast(Live::Message(message));

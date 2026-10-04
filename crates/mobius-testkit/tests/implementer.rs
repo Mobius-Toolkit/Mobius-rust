@@ -385,8 +385,9 @@ async fn a_push_that_github_rejects_stops_the_task_with_no_restart() {
 async fn a_second_task_of_the_issue_gets_the_next_free_branch() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;
+    // A new Lead session has the earlier events in its chat history, so the first entry matches the second dispatch by the end of the history.
     let lead = format!(
-        "[[prompts]]\nwhen = \"dispatch of #41\"\n{START}\n[[prompts]]\nwhen = \"cannot_do on #41\"\ncall = {{ tool = \"decline\", arguments = {{ n = 41, reason = \"Split it.\" }} }}\n"
+        "[[prompts]]\nwhen = \"does not exist.\\n\\n# Event\\n\\n\"\n{START}[[prompts]]\nwhen = \"cannot_do on #41\"\ncall = {{ tool = \"decline\", arguments = {{ n = 41, reason = \"Split it.\" }} }}\n[[prompts]]\nwhen = \"dispatch of #41\"\n{START}"
     );
     let implementer =
         format!("[[prompts]]\n{CANNOT_DO}\n[[prompts]]\nwhen = \"Start again.\"\n{COMMIT}");

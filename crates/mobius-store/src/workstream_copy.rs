@@ -183,6 +183,22 @@ impl WorkstreamCopy<'_> {
         .await?)
     }
 
+    // Gives the numbers of the issues in the tree of the Workstream.
+    pub async fn issue_numbers(
+        &self,
+        repository: &str,
+        workstream: i64,
+    ) -> Result<Vec<i64>, Box<dyn Error + Send + Sync>> {
+        Ok(sqlx::query_scalar!(
+            r#"SELECT number AS "number!: i64" FROM copied_issues
+               WHERE repository = ? AND workstream = ?"#,
+            repository,
+            workstream
+        )
+        .fetch_all(self.pool)
+        .await?)
+    }
+
     // Gives the Workstreams of the repository whose trees have a blocker row in the Workstream `blocker_workstream`.
     pub async fn workstreams_with_blocker_in(
         &self,

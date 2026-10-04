@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT number AS \"number!: i64\" FROM copied_issues\n               WHERE repository = ? AND workstream = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "copied_issues",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "334de76ab0e0482d68290b35686b3c06bd81e76dc5724547bfc512ee42abd8bb"
+}

@@ -972,3 +972,20 @@ async fn a_poll_with_no_link_change_in_the_copy_sends_no_workstreams_event() {
     }
     assert!(blockers(&engine).await.is_empty());
 }
+
+#[tokio::test]
+async fn a_sub_issue_link_that_removes_a_blocker_from_its_workstream_changes_the_blocker_of_another_tree()
+ {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    github.add_blocker_quietly(REPOSITORY, 42, 60);
+    wait_for(async || {
+        (blockers(&engine).await == [(42, 60, Some(13), Some("Billing".to_string()))]).then_some(())
+    })
+    .await;
+
+    github.remove_sub_issue(REPOSITORY, 13, 60);
+
+    wait_for(async || (blockers(&engine).await == [(42, 60, None, None)]).then_some(())).await;
+}

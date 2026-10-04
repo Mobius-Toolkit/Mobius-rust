@@ -39,7 +39,7 @@ pub async fn start_with(
 }
 
 pub fn config(data_dir: &Path, access_password: &str, extra_config: &str) -> Config {
-    mobius_engine::config::parse(&format!(
+    let mut config = mobius_engine::config::parse(&format!(
         r#"
 access_password = "{access_password}"
 trusted_users = ["owner"]
@@ -58,7 +58,9 @@ judge       = {{ harness = "claude-code", model = "haiku",   effort = "low" }}
 "#,
         data_dir.display()
     ))
-    .unwrap()
+    .unwrap();
+    config.restart_waits = vec![Duration::from_millis(10)];
+    config
 }
 
 // The Harness `PATH` is `harnesses` and then the `PATH` of the test. The `gh` in `harnesses` prints its arguments and `GH_TOKEN`.

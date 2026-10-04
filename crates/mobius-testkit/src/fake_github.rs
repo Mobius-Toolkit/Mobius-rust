@@ -158,6 +158,10 @@ struct Records {
     failed_closes: HashSet<(String, i64)>,
     // The issues whose sub-issue list request fails, as (repository, number).
     failed_sub_issues: HashSet<(String, i64)>,
+    // The Unix time at which the exhausted core rate limit resets. Without it, the limit has calls left.
+    rate_limit_reset: Option<i64>,
+    // The repositories whose pull request creation fails, with the status, the message, and the messages of the errors.
+    failed_pull_requests: HashMap<String, (StatusCode, String, Vec<String>)>,
     // The permissions of each App and of its installation by App id. An App without an entry has `DEFAULT_PERMISSIONS`.
     app_permissions: HashMap<i64, HashMap<String, String>>,
     installation_permissions: HashMap<i64, HashMap<String, String>>,
@@ -515,6 +519,7 @@ impl FakeGitHub {
             .route("/app-manifests/{code}/conversions", post(convert_manifest))
             .route("/login/oauth/access_token", post(exchange_code))
             .route("/user", get(user))
+            .route("/rate_limit", get(rate_limit))
             .route("/app", get(app))
             .route("/app/installations", get(installations))
             .route(
@@ -627,6 +632,27 @@ impl FakeGitHub {
             .unwrap()
             .failed_sub_issues
             .insert((repository.to_string(), number));
+    }
+
+    pub fn exhaust_rate_limit(&self, reset: i64) {
+        self.state.lock().unwrap().rate_limit_reset = Some(reset);
+    }
+
+    pub fn fail_pull_request_creation(
+        &self,
+        repository: &str,
+        status: u16,
+        message: &str,
+        errors: &[&str],
+    ) {
+        self.state.lock().unwrap().failed_pull_requests.insert(
+            repository.to_string(),
+            (
+                StatusCode::from_u16(status).unwrap(),
+                message.to_string(),
+                errors.iter().map(|error| error.to_string()).collect(),
+            ),
+        );
     }
 
     pub fn add_account(&self, login: &str, account_type: &'static str) {
@@ -1229,6 +1255,16 @@ fn not_found() -> Response {
         .into_response()
 }
 
+async fn rate_limit(State(state): State<Shared>) -> Response {
+    let (remaining, reset) = match state.lock().unwrap().rate_limit_reset {
+        Some(reset) => (0, reset),
+        None => (5000, 0),
+    };
+    let rate =
+        json!({ "limit": 5000, "used": 5000 - remaining, "remaining": remaining, "reset": reset });
+    Json(json!({ "resources": { "core": rate, "search": rate }, "rate": rate })).into_response()
+}
+
 async fn latest_release(State(state): State<Shared>) -> Response {
     match &state.lock().unwrap().latest_release {
         Some(tag) => Json(json!({ "tag_name": tag, "assets": [] })).into_response(),
@@ -1658,6 +1694,17 @@ async fn create_pull_request(
 ) -> Response {
     let repository = format!("{owner}/{repo}");
     let mut records = state.lock().unwrap();
+    if let Some((status, message, errors)) = records.failed_pull_requests.get(&repository) {
+        let errors: Vec<Value> = errors
+            .iter()
+            .map(|error| json!({ "resource": "PullRequest", "code": "custom", "message": error }))
+            .collect();
+        return (
+            *status,
+            Json(json!({ "message": message, "errors": errors })),
+        )
+            .into_response();
+    }
     let number = records.insert_pull_request(&repository, new);
     let mut json = pull_request_json(&records, &repository, number);
     json["mergeable"] = Value::Null;

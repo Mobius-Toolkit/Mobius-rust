@@ -1,11 +1,14 @@
 use std::fs;
+use std::time::Duration;
 
 use mobius_domain::{InboxKind, Session, TranscriptRow};
+use mobius_engine::config::Config;
 use mobius_engine::{Engine, github, inbox, workstreams};
 use mobius_testkit::fake_github::{APP_SLUG, FakeGitHub};
-use mobius_testkit::{install_fake_harness, start_with_config, wait_for};
+use mobius_testkit::{install_fake_harness, start_with, wait_for};
 use serde_json::Value;
 use tempfile::TempDir;
+use time::OffsetDateTime;
 
 const REPOSITORY: &str = "owner/shop";
 const FAKE_AGENT: &str = env!("CARGO_BIN_EXE_fake-agent");
@@ -43,6 +46,17 @@ async fn connect(
     implementer: &str,
     extra_config: &str,
 ) -> Engine {
+    connect_with(data_dir, github, lead, implementer, extra_config, |_| {}).await
+}
+
+async fn connect_with(
+    data_dir: &TempDir,
+    github: &FakeGitHub,
+    lead: &str,
+    implementer: &str,
+    extra_config: &str,
+    adjust: impl FnOnce(&mut Config),
+) -> Engine {
     github.add_manifest_code("manifest-code");
     github.add_repository(REPOSITORY);
     github.add_issue(REPOSITORY, 12, "Integrate loyalty plans");
@@ -61,8 +75,14 @@ async fn connect(
         "devin",
         &format!("{DEVIN_OPTIONS}\n{implementer}"),
     );
-    let engine =
-        start_with_config(data_dir.path(), "correct horse", &github.url, extra_config).await;
+    let engine = start_with(
+        data_dir.path(),
+        "correct horse",
+        &github.url,
+        extra_config,
+        adjust,
+    )
+    .await;
     github::convert_manifest(&engine, "manifest-code")
         .await
         .unwrap();
@@ -182,6 +202,127 @@ async fn a_worker_that_dies_after_max_worker_restarts_goes_to_a_human() {
         prompt.contains("the Worker failed after 1 restarts. Mobius added mobius:needs-human. The last error ends with these lines:\n\n```\nIncoming transport closed"),
         "{prompt}"
     );
+}
+
+#[tokio::test]
+async fn a_github_error_shows_its_status_and_message_in_the_stop_event() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let implementer = format!("[[prompts]]\nshell = \"{COMMIT}\"\n");
+    let engine = connect(
+        &data_dir,
+        &github,
+        &dispatch_start(),
+        &implementer,
+        "max_worker_restarts = 1",
+    )
+    .await;
+    github.fail_pull_request_creation(REPOSITORY, 403, "API rate limit exceeded", &[]);
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    let prompt = wait_for(async || {
+        lead_prompts(&engine)
+            .await
+            .into_iter()
+            .find(|prompt| prompt.contains(" stop of #41 \"Add plan model\":"))
+    })
+    .await;
+    assert!(
+        prompt.contains(
+            "The last error ends with these lines:\n\n```\nGitHub 403: API rate limit exceeded\n```"
+        ),
+        "{prompt}"
+    );
+}
+
+#[tokio::test]
+async fn a_github_error_shows_the_messages_of_its_errors_in_the_stop_event() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let implementer = format!("[[prompts]]\nshell = \"{COMMIT}\"\n");
+    let engine = connect(
+        &data_dir,
+        &github,
+        &dispatch_start(),
+        &implementer,
+        "max_worker_restarts = 1",
+    )
+    .await;
+    github.fail_pull_request_creation(
+        REPOSITORY,
+        422,
+        "Validation Failed",
+        &["A pull request already exists for owner:branch."],
+    );
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    let prompt = wait_for(async || {
+        lead_prompts(&engine)
+            .await
+            .into_iter()
+            .find(|prompt| prompt.contains(" stop of #41 \"Add plan model\":"))
+    })
+    .await;
+    assert!(
+        prompt.contains(
+            "GitHub 422: Validation Failed: A pull request already exists for owner:branch."
+        ),
+        "{prompt}"
+    );
+}
+
+#[tokio::test]
+async fn a_worker_that_dies_starts_again_after_the_restart_wait() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let flag = data_dir.path().join("died");
+    let implementer = format!(
+        "[[prompts]]\nshell = \"{}\"\n",
+        die_once(&flag, COMMIT).replace('"', "\\\"")
+    );
+    let engine = connect_with(
+        &data_dir,
+        &github,
+        &dispatch_start(),
+        &implementer,
+        "",
+        |config| config.restart_waits = vec![Duration::from_secs(3)],
+    )
+    .await;
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    wait_for(async || {
+        let implementers = sessions(&engine, "implementer").await;
+        (implementers.len() == 1 && implementers[0].ended_at.is_some()).then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(sessions(&engine, "implementer").await.len(), 1);
+    wait_for(async || (!github.pull_requests(REPOSITORY).is_empty()).then_some(())).await;
+    assert_eq!(sessions(&engine, "implementer").await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_worker_that_fails_in_a_rate_limit_starts_again_after_the_reset() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let implementer = format!("[[prompts]]\nshell = \"{COMMIT}\"\n");
+    let engine = connect(&data_dir, &github, &dispatch_start(), &implementer, "").await;
+    github.fail_pull_request_creation(REPOSITORY, 403, "API rate limit exceeded", &[]);
+    let reset = OffsetDateTime::now_utc().unix_timestamp() + 5;
+    github.exhaust_rate_limit(reset);
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    let implementers = wait_for(async || {
+        let implementers = sessions(&engine, "implementer").await;
+        (implementers.len() == 2).then_some(implementers)
+    })
+    .await;
+    assert!(implementers[1].started_at.unix_timestamp() >= reset);
 }
 
 #[tokio::test]

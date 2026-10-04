@@ -337,20 +337,21 @@ impl Tasks<'_> {
         Ok(())
     }
 
-    // Gives `false` when the task has `max` Worker restarts.
+    // Gives the new number of Worker restarts, or `None` when the task has `max` Worker restarts.
     pub async fn add_worker_restart(
         &self,
         id: i64,
         max: u32,
-    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
-        let result = sqlx::query!(
-            "UPDATE tasks SET worker_restarts = worker_restarts + 1 WHERE id = ? AND worker_restarts < ?",
+    ) -> Result<Option<i64>, Box<dyn Error + Send + Sync>> {
+        let row = sqlx::query!(
+            r#"UPDATE tasks SET worker_restarts = worker_restarts + 1 WHERE id = ? AND worker_restarts < ?
+               RETURNING worker_restarts AS "worker_restarts!""#,
             id,
             max
         )
-        .execute(self.pool)
+        .fetch_optional(self.pool)
         .await?;
-        Ok(result.rows_affected() == 1)
+        Ok(row.map(|row| row.worker_restarts))
     }
 
     pub async fn reset_counters(&self, id: i64) -> Result<(), Box<dyn Error + Send + Sync>> {

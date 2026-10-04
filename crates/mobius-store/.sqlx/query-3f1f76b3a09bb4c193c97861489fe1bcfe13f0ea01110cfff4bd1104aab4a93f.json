@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks SET worker_restarts = worker_restarts + 1 WHERE id = ? AND worker_restarts < ?\n               RETURNING worker_restarts AS \"worker_restarts!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker_restarts!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "worker_restarts"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3f1f76b3a09bb4c193c97861489fe1bcfe13f0ea01110cfff4bd1104aab4a93f"
+}

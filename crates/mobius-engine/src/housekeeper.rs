@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
+use std::time::Duration;
 
 use mobius_domain::InboxKind;
 use time::OffsetDateTime;
@@ -127,7 +128,7 @@ pub(crate) async fn wait_for_disk(
     Ok(())
 }
 
-// At `max_worker_restarts`, the task goes to a human, and the Lead gets a stop event.
+// Waits before it gives `true`, and the Worker holds no slot during the wait. The wait ends not before the reset of the GitHub rate limit. At `max_worker_restarts`, the task goes to a human, and the Lead gets a stop event.
 pub(crate) async fn restart(
     engine: &Engine,
     repository: &str,
@@ -138,7 +139,19 @@ pub(crate) async fn restart(
     error: &str,
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let max = engine.config.max_worker_restarts;
-    if engine.store.tasks().add_worker_restart(task, max).await? {
+    if let Some(restarts) = engine.store.tasks().add_worker_restart(task, max).await? {
+        let mut wait = engine.config.restart_wait(restarts);
+        if let Some(reset) = engine
+            .repository(repository)?
+            .rate_limit_reset()
+            .await
+            .ok()
+            .flatten()
+        {
+            let until_reset = reset - OffsetDateTime::now_utc().unix_timestamp();
+            wait = wait.max(Duration::from_secs(until_reset.try_into().unwrap_or(0)));
+        }
+        tokio::time::sleep(wait).await;
         return Ok(true);
     }
     if !implementer::hand_to_human(engine, repository, task, number).await? {

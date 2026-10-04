@@ -520,7 +520,7 @@ async fn abandon_round(
         )
         .await;
     tasks.set_review_comment(task.id, None).await?;
-    updated
+    Ok(updated?)
 }
 
 // A task that is not in the state `from`, for example after a decline of the Lead, stays a draft.

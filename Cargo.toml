@@ -50,3 +50,6 @@ opt-level = 3
 
 [profile.dev.package.rsa]
 opt-level = 3
+
+[profile.dev]
+debug = "line-tables-only"

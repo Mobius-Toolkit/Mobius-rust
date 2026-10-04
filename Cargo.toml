@@ -47,3 +47,8 @@ mobius-runner = { path = "crates/mobius-runner" }
 
 [profile.dev]
 debug = "line-tables-only"
+incremental = false
+strip = "symbols"
+
+[profile.dev.package."*"]
+debug = false

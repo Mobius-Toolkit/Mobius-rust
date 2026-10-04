@@ -540,16 +540,8 @@ impl FakeGitHub {
                 get(sub_issues).post(add_sub_issue),
             )
             .route(
-                "/repos/{owner}/{repo}/issues/{number}/sub_issue",
-                delete(remove_sub_issue),
-            )
-            .route(
                 "/repos/{owner}/{repo}/issues/{number}/dependencies/blocked_by",
                 get(blocked_by).post(add_blocked_by),
-            )
-            .route(
-                "/repos/{owner}/{repo}/issues/{number}/dependencies/blocked_by/{issue_id}",
-                delete(remove_blocked_by),
             )
             .route("/repos/{owner}/{repo}/issues/{number}/parent", get(parent))
             .route(
@@ -2315,33 +2307,6 @@ async fn add_sub_issue(
         .into_response()
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RemovedSubIssue {
-    sub_issue_id: i64,
-}
-
-async fn remove_sub_issue(
-    State(state): State<Shared>,
-    Path((owner, repo, number)): Path<(String, String, i64)>,
-    Json(removed): Json<RemovedSubIssue>,
-) -> Response {
-    let repository = format!("{owner}/{repo}");
-    let mut records = state.lock().unwrap();
-    let child = removed.sub_issue_id - ISSUE_ID_OFFSET;
-    let Some(issue) = records.issues.get_mut(&(repository.clone(), number)) else {
-        return not_found();
-    };
-    let linked = issue.sub_issues.len();
-    issue
-        .sub_issues
-        .retain(|link| *link != (repository.clone(), child));
-    if issue.sub_issues.len() == linked {
-        return not_found();
-    }
-    Json(records.issue_json(&repository, number)).into_response()
-}
-
 async fn blocked_by(
     State(state): State<Shared>,
     Path((owner, repo, number)): Path<(String, String, i64)>,
@@ -2388,26 +2353,6 @@ async fn add_blocked_by(
         Json(records.issue_json(&repository, blocker)),
     )
         .into_response()
-}
-
-async fn remove_blocked_by(
-    State(state): State<Shared>,
-    Path((owner, repo, number, issue_id)): Path<(String, String, i64, i64)>,
-) -> Response {
-    let repository = format!("{owner}/{repo}");
-    let mut records = state.lock().unwrap();
-    let blocker = issue_id - ISSUE_ID_OFFSET;
-    let now = records.tick();
-    let Some(issue) = records.issues.get_mut(&(repository.clone(), number)) else {
-        return not_found();
-    };
-    let linked = issue.blocked_by.len();
-    issue.blocked_by.retain(|linked| *linked != blocker);
-    if issue.blocked_by.len() == linked {
-        return not_found();
-    }
-    issue.updated_at = now;
-    Json(records.issue_json(&repository, blocker)).into_response()
 }
 
 async fn sub_issues(

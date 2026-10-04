@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 
 use http::StatusCode;
@@ -232,6 +232,15 @@ pub struct ReviewThread {
     pub resolved: bool,
     // The REST login of the author of each comment, in order.
     pub authors: Vec<String>,
+}
+
+// The links of an open issue of the repository.
+#[derive(Clone, PartialEq)]
+pub struct IssueLinks {
+    pub parent: Option<i64>,
+    // The number of sub-issues, open and closed, in all repositories.
+    pub sub_issues: i64,
+    pub blockers: BTreeSet<i64>,
 }
 
 pub struct IssuePage {
@@ -1156,6 +1165,72 @@ impl Repository {
             |page: Vec<Issue>| page,
         )
         .await
+    }
+
+    // GitHub allows 50 blockers for an issue. A query costs one point for each 100 open issues.
+    pub async fn links(&self) -> Result<BTreeMap<i64, IssueLinks>, Box<dyn Error + Send + Sync>> {
+        let (owner, name) = self
+            .full_name
+            .split_once('/')
+            .ok_or_else(|| format!("{} has no owner.", self.full_name))?;
+        let mut links = BTreeMap::new();
+        let mut after = serde_json::Value::Null;
+        loop {
+            let data: serde_json::Value = self
+                .client
+                .graphql(&json!({
+                    "query": "query($owner: String!, $name: String!, $after: String) {
+                        repository(owner: $owner, name: $name) {
+                            issues(first: 100, states: OPEN, after: $after) {
+                                nodes {
+                                    number
+                                    parent { number repository { nameWithOwner } }
+                                    subIssuesSummary { total }
+                                    blockedBy(first: 50) {
+                                        nodes { number state repository { nameWithOwner } }
+                                    }
+                                }
+                                pageInfo { hasNextPage endCursor }
+                            }
+                        }
+                    }",
+                    "variables": { "owner": owner, "name": name, "after": after }
+                }))
+                .await?;
+            let page = &data["repository"]["issues"];
+            for node in page["nodes"].as_array().ok_or("GitHub gave no issues.")? {
+                let in_repository = |issue: &serde_json::Value| {
+                    issue["repository"]["nameWithOwner"]
+                        .as_str()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(&self.full_name))
+                };
+                let parent = Some(&node["parent"])
+                    .filter(|parent| in_repository(parent))
+                    .and_then(|parent| parent["number"].as_i64());
+                let blockers = node["blockedBy"]["nodes"]
+                    .as_array()
+                    .ok_or("GitHub gave no blockers.")?
+                    .iter()
+                    .filter(|blocker| blocker["state"] == "OPEN" && in_repository(blocker))
+                    .filter_map(|blocker| blocker["number"].as_i64())
+                    .collect();
+                let sub_issues = node["subIssuesSummary"]["total"]
+                    .as_i64()
+                    .ok_or("GitHub gave no sub-issue total.")?;
+                links.insert(
+                    node["number"].as_i64().ok_or("GitHub gave no number.")?,
+                    IssueLinks {
+                        parent,
+                        sub_issues,
+                        blockers,
+                    },
+                );
+            }
+            if page["pageInfo"]["hasNextPage"] != true {
+                return Ok(links);
+            }
+            after = page["pageInfo"]["endCursor"].clone();
+        }
     }
 
     // Gives `None` when GitHub answers `304 Not Modified` to `etag`.

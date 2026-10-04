@@ -1167,6 +1167,17 @@ impl FakeGitHub {
             .push((repository.to_string(), child));
     }
 
+    pub fn remove_sub_issue(&self, repository: &str, parent: i64, child: i64) {
+        self.state
+            .lock()
+            .unwrap()
+            .issues
+            .get_mut(&(repository.to_string(), parent))
+            .unwrap()
+            .sub_issues
+            .retain(|link| *link != (repository.to_string(), child));
+    }
+
     // Creates the issue and the link in one step, so that a poll sees both.
     pub fn add_sub_issue_of(&self, repository: &str, parent: i64, number: i64, title: &str) {
         let mut records = self.state.lock().unwrap();
@@ -1214,6 +1225,30 @@ impl FakeGitHub {
             .unwrap();
         issue.blocked_by.push(blocker);
         issue.updated_at = now;
+    }
+
+    // Changes no `updated_at`, so the `since` poll does not return the blocked issue.
+    pub fn add_blocker_quietly(&self, repository: &str, number: i64, blocker: i64) {
+        self.state
+            .lock()
+            .unwrap()
+            .issues
+            .get_mut(&(repository.to_string(), number))
+            .unwrap()
+            .blocked_by
+            .push(blocker);
+    }
+
+    // Changes no `updated_at`, so the `since` poll does not return the blocked issue.
+    pub fn remove_blocker_quietly(&self, repository: &str, number: i64, blocker: i64) {
+        self.state
+            .lock()
+            .unwrap()
+            .issues
+            .get_mut(&(repository.to_string(), number))
+            .unwrap()
+            .blocked_by
+            .retain(|linked| *linked != blocker);
     }
 
     pub fn not_modified_count(&self) -> u32 {
@@ -1960,6 +1995,9 @@ async fn graphql(State(state): State<Shared>, Json(request): Json<GraphQl>) -> R
         variables["owner"].as_str().unwrap(),
         variables["name"].as_str().unwrap()
     );
+    if request.query.contains("blockedBy") {
+        return open_issue_links(&records, &repository);
+    }
     let number = variables["number"].as_i64().unwrap();
     let comments = &records.issues[&(repository, number)].review_comments;
     let threads: Vec<Value> = comments
@@ -1996,6 +2034,57 @@ async fn graphql(State(state): State<Shared>, Json(request): Json<GraphQl>) -> R
                         "nodes": threads,
                         "pageInfo": { "hasNextPage": false, "endCursor": null }
                     }
+                }
+            }
+        }
+    }))
+    .into_response()
+}
+
+// Answers the links query in one page: the parent and the blockers of each open issue of the repository.
+fn open_issue_links(records: &Records, repository: &str) -> Response {
+    let node = |number: i64| {
+        json!({
+            "number": number,
+            "state": "OPEN",
+            "repository": { "nameWithOwner": repository }
+        })
+    };
+    let nodes: Vec<Value> = records
+        .issues
+        .iter()
+        .filter(|((name, _), issue)| {
+            name == repository && !issue.pull_request && issue.state == "open"
+        })
+        .map(|((_, number), issue)| {
+            let parent = records.issues.iter().find(|((name, _), parent)| {
+                name == repository
+                    && parent.sub_issues.iter().any(|(child_repository, child)| {
+                        child_repository == repository && child == number
+                    })
+            });
+            let blockers: Vec<Value> = issue
+                .blocked_by
+                .iter()
+                .filter(|blocker| {
+                    records.issues[&(repository.to_string(), **blocker)].state == "open"
+                })
+                .map(|blocker| node(*blocker))
+                .collect();
+            json!({
+                "number": number,
+                "parent": parent.map(|((_, parent), _)| node(*parent)),
+                "subIssuesSummary": { "total": issue.sub_issues.len() },
+                "blockedBy": { "nodes": blockers }
+            })
+        })
+        .collect();
+    Json(json!({
+        "data": {
+            "repository": {
+                "issues": {
+                    "nodes": nodes,
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }
                 }
             }
         }

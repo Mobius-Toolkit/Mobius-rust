@@ -1,16 +1,20 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
 use mobius_domain::Live;
-use mobius_github::{Issue, IssueEvent, Repository};
+use mobius_github::{Issue, IssueEvent, IssueLinks, Repository};
 use mobius_store::{ChangedIssue, CopiedBlocker, CopiedIssue, CopiedWorkstream};
 
 use crate::labels::{AUTOPILOT_LABEL, WORKSTREAM_LABEL};
 use crate::{Engine, ends, tasks, workstreams};
 
+// Gives the links of the open issues that the copy has after the sync.
+// The links are read first, so a change during the sync shows in the next `relink`.
 pub(crate) async fn sync(
     engine: &Engine,
     repository: &Repository,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<BTreeMap<i64, IssueLinks>, Box<dyn Error + Send + Sync>> {
+    let links = repository.links().await?;
     let mut workstreams = Vec::new();
     for workstream in repository.open_issues_with_label(WORKSTREAM_LABEL).await? {
         let autopilot = workstreams::issue_autopilot(engine, repository, &workstream).await?;
@@ -22,6 +26,89 @@ pub(crate) async fn sync(
         .replace(&repository.full_name, &workstreams)
         .await?;
     engine.broadcast(Live::Workstreams);
+    Ok(links)
+}
+
+// Reads again the trees that have a sub-issue link or a blocker link that is different from the links of the last sync or `relink`.
+// GitHub can change a link with no change of `updated_at`, so the `since` poll does not see it.
+// An issue that is new in the links, because it is new or it opened again, can have a new parent, so the trees that hold its parent are stale.
+// The number of sub-issues of a parent shows a link of a closed issue, which the query of the links does not read.
+// Two moves in opposite directions that keep the number of sub-issues of each parent show after the next full sync.
+// A moved issue and its descendants get another Workstream, which the blocker rows of the other trees store.
+// The tree of a Workstream has no blocker and no parent of the Workstream, so only a new sub-issue total makes its own tree stale.
+// A nested Workstream is a leaf with no blocker in the tree of its parent, so only a new parent makes the trees that hold it stale.
+// The tree of a parent that is a Workstream holds no other tree, so the trees that hold the parent stay as they are.
+// A blocker that closes is not a key of the links. The `since` poll sees the closed issue, and `update` removes its rows.
+pub(crate) async fn relink(
+    engine: &Engine,
+    repository: &Repository,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let name = &repository.full_name;
+    let Some(before) = engine.copied.lock().unwrap().get(name).cloned() else {
+        return Ok(());
+    };
+    let after = repository.links().await?;
+    let copy = engine.store.workstream_copy();
+    let mut stale = BTreeSet::new();
+    for (number, links) in &after {
+        let old = before.get(number);
+        if old.is_some_and(|old| {
+            let open_blockers: BTreeSet<i64> = old
+                .blockers
+                .iter()
+                .filter(|blocker| after.contains_key(blocker))
+                .copied()
+                .collect();
+            old.parent == links.parent
+                && old.sub_issues == links.sub_issues
+                && open_blockers == links.blockers
+        }) {
+            continue;
+        }
+        let is_workstream = copy.has_workstream(name, *number).await?;
+        let parent_changed = old.is_none_or(|old| old.parent != links.parent);
+        if let Some(old) = old {
+            if !is_workstream || parent_changed {
+                stale.extend(copy.workstreams_holding(name, *number).await?);
+            }
+            if is_workstream && old.sub_issues != links.sub_issues {
+                stale.insert(*number);
+            }
+        }
+        if let Some(parent) = links.parent
+            && (!is_workstream || parent_changed)
+        {
+            if copy.has_workstream(name, parent).await? {
+                stale.insert(parent);
+            } else {
+                stale.extend(copy.workstreams_holding(name, parent).await?);
+            }
+        }
+    }
+    let mut moved = BTreeSet::new();
+    for workstream in &stale {
+        let old: BTreeSet<i64> = copy
+            .issue_numbers(name, *workstream)
+            .await?
+            .into_iter()
+            .collect();
+        let issues = tree(repository, *workstream).await?;
+        let new: BTreeSet<i64> = issues.iter().map(|issue| issue.number).collect();
+        moved.extend(old.symmetric_difference(&new));
+        copy.replace_issues(name, *workstream, &issues).await?;
+    }
+    let mut blocked_trees = BTreeSet::new();
+    for number in moved {
+        blocked_trees.extend(copy.workstreams_with_blocker(name, number).await?);
+    }
+    for workstream in blocked_trees.difference(&stale) {
+        let issues = tree(repository, *workstream).await?;
+        copy.replace_issues(name, *workstream, &issues).await?;
+    }
+    engine.copied.lock().unwrap().insert(name.clone(), after);
+    if !stale.is_empty() {
+        engine.broadcast(Live::Workstreams);
+    }
     Ok(())
 }
 

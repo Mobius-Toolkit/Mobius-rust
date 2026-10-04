@@ -38,7 +38,7 @@ pub mod upgrade;
 mod workers;
 pub mod workstreams;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::sync::{Arc, Mutex, RwLock};
@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use chat::ChatHandle;
 use config::Config;
 use mobius_domain::Live;
-use mobius_github::{GitHub, Repository};
+use mobius_github::{GitHub, IssueLinks, Repository};
 use mobius_store::Store;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
@@ -66,8 +66,9 @@ pub struct Engine {
     harness_path: Arc<OsString>,
     port: u16,
     repositories: Arc<RwLock<Vec<Repository>>>,
-    // The repositories where a full sync of the copy of the Workstream and task data succeeded in this run of the engine.
-    copied: Arc<Mutex<std::collections::HashSet<String>>>,
+    // The repositories where a full sync of the copy of the Workstream and task data succeeded in this run of the engine,
+    // with the links of their open issues as the copy last saw them.
+    copied: Arc<Mutex<HashMap<String, BTreeMap<i64, IssueLinks>>>>,
     // The repositories where the poll tried a label fix in this run of the engine, with success or failure.
     labels_fixed: Arc<Mutex<std::collections::HashSet<String>>>,
     chats: Arc<Mutex<HashMap<ChatKey, ChatHandle>>>,

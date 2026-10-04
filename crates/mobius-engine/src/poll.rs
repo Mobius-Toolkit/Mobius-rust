@@ -82,15 +82,15 @@ async fn poll(engine: &Engine) -> Result<(), Box<dyn Error + Send + Sync>> {
             .copied
             .lock()
             .unwrap()
-            .contains(&repository.full_name)
+            .contains_key(&repository.full_name)
         {
             match copy::sync(engine, repository).await {
-                Ok(()) => {
+                Ok(links) => {
                     engine
                         .copied
                         .lock()
                         .unwrap()
-                        .insert(repository.full_name.clone());
+                        .insert(repository.full_name.clone(), links);
                 }
                 Err(error) => eprintln!("mobius: full sync of {}: {error}", repository.full_name),
             }
@@ -118,6 +118,14 @@ async fn poll_repository(
     work: &mut BTreeMap<i64, Work>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     recovery::repository(engine, repository).await?;
+    // After a failed update, the next poll replaces the copy with a full sync.
+    if let Err(error) = copy::relink(engine, repository).await {
+        eprintln!(
+            "mobius: links of the copy of {}: {error}",
+            repository.full_name
+        );
+        engine.copied.lock().unwrap().remove(&repository.full_name);
+    }
     changed_issues(engine, app_slug, repository).await?;
     dispatch::dispatch_ready(engine, app_slug, repository).await?;
     autopilot::start(engine, app_slug, repository).await?;
@@ -139,7 +147,7 @@ async fn changed_issues(
     };
     // At the first poll of a repository, Mobius cannot see which event is new.
     let first_poll = cursor.since.is_none();
-    let mut copied = engine.copied.lock().unwrap().contains(name);
+    let mut copied = engine.copied.lock().unwrap().contains_key(name);
     let mut workstreams_changed = false;
     for issue in &page.issues {
         if issue.pull_request.is_some() {

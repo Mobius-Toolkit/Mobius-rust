@@ -699,6 +699,26 @@ async fn a_closed_blocker_is_removed_from_the_copy() {
 }
 
 #[tokio::test]
+async fn a_closed_blocker_does_not_read_the_tree_of_the_blocked_task_again() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_blocker(&data_dir, &github).await;
+    let mut feed = activity::feed(&engine, None).await.unwrap();
+    wait_until_quiet(&mut feed).await;
+
+    github.close_issue(REPOSITORY, 60);
+
+    wait_for(async || blockers(&engine).await.is_empty().then_some(())).await;
+    let mut events = 0;
+    while let Ok(live) = tokio::time::timeout(Duration::from_millis(500), feed.next()).await {
+        if live.unwrap() == Live::Workstreams {
+            events += 1;
+        }
+    }
+    assert_eq!(events, 1);
+}
+
+#[tokio::test]
 async fn a_new_title_of_a_workstream_changes_the_title_in_the_blockers_of_the_copy() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;
@@ -823,6 +843,251 @@ async fn a_new_workstream_changes_the_workstream_of_a_blocker_in_another_tree() 
 
     wait_for(async || {
         (blockers(&engine).await == [(60, 50, Some(41), Some("Add plan model".to_string()))])
+            .then_some(())
+    })
+    .await;
+}
+
+// Workstream 12 has the task 41 and the task 42, and 41 has the task 50.
+// Workstream 13 has the task 60. The issue 70 has no parent.
+// No test below changes `updated_at` of an issue, so the `since` poll sees no change.
+async fn copied_links(data_dir: &TempDir, github: &FakeGitHub) -> Engine {
+    // The `since` poll returns the issue with the newest `updated_at` again, so 70 must not be the newest.
+    github.add_issue(REPOSITORY, 70, "Fix the footer");
+    github.add_issue(REPOSITORY, 12, "Integrate loyalty plans");
+    github.add_label(REPOSITORY, 12, "mobius:workstream", "owner");
+    github.add_issue(REPOSITORY, 13, "Billing");
+    github.add_label(REPOSITORY, 13, "mobius:workstream", "owner");
+    github.add_issue(REPOSITORY, 41, "Add plan model");
+    github.add_sub_issue(REPOSITORY, 12, 41);
+    github.add_issue(REPOSITORY, 50, "Store the price in cents");
+    github.add_sub_issue(REPOSITORY, 41, 50);
+    github.add_issue(REPOSITORY, 42, "Let customers change plans");
+    github.add_sub_issue(REPOSITORY, 12, 42);
+    github.add_issue(REPOSITORY, 60, "Invoice model");
+    github.add_sub_issue(REPOSITORY, 13, 60);
+    let engine = connect(data_dir, github).await;
+    workstreams(&engine).await;
+    wait_for_first_poll(&engine, REPOSITORY).await;
+    engine
+}
+
+#[tokio::test]
+async fn a_new_sub_issue_link_adds_the_issue_to_the_copy() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+
+    github.add_sub_issue(REPOSITORY, 41, 70);
+
+    wait_for(async || (issue_numbers(&engine).await == [41, 50, 70, 42, 60]).then_some(())).await;
+    assert_eq!(issues(&engine).await[2].2, 41);
+}
+
+#[tokio::test]
+async fn a_removed_sub_issue_link_removes_the_issue_from_the_copy() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+
+    github.remove_sub_issue(REPOSITORY, 12, 42);
+
+    wait_for(async || (issue_numbers(&engine).await == [41, 50, 60]).then_some(())).await;
+}
+
+#[tokio::test]
+async fn a_sub_issue_link_that_moves_an_issue_changes_both_trees_in_the_copy() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+
+    github.remove_sub_issue(REPOSITORY, 12, 42);
+    github.add_sub_issue(REPOSITORY, 13, 42);
+
+    wait_for(async || {
+        let rows = issues(&engine).await;
+        (rows.iter().any(|row| (row.0, row.1, row.2) == (13, 42, 13))
+            && rows.iter().all(|row| (row.0, row.1) != (12, 42)))
+        .then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_new_blocker_link_adds_the_blocker_to_the_copy() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    assert!(blockers(&engine).await.is_empty());
+
+    github.add_blocker_quietly(REPOSITORY, 42, 60);
+
+    wait_for(async || {
+        (blockers(&engine).await == [(42, 60, Some(13), Some("Billing".to_string()))]).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_removed_blocker_link_removes_the_blocker_from_the_copy() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    github.add_issue(REPOSITORY, 12, "Integrate loyalty plans");
+    github.add_label(REPOSITORY, 12, "mobius:workstream", "owner");
+    github.add_issue(REPOSITORY, 42, "Let customers change plans");
+    github.add_sub_issue(REPOSITORY, 12, 42);
+    github.add_issue(REPOSITORY, 70, "Fix the footer");
+    github.add_blocker(REPOSITORY, 42, 70);
+    let engine = connect(&data_dir, &github).await;
+    workstreams(&engine).await;
+    wait_for_first_poll(&engine, REPOSITORY).await;
+    assert_eq!(blockers(&engine).await, [(42, 70, None, None)]);
+
+    github.remove_blocker_quietly(REPOSITORY, 42, 70);
+
+    wait_for(async || blockers(&engine).await.is_empty().then_some(())).await;
+}
+
+#[tokio::test]
+async fn a_blocker_that_opens_again_is_in_the_copy_again() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_blocker(&data_dir, &github).await;
+    github.close_issue(REPOSITORY, 60);
+    wait_for(async || blockers(&engine).await.is_empty().then_some(())).await;
+
+    github.reopen_issue(REPOSITORY, 60);
+
+    wait_for(async || {
+        (blockers(&engine).await == [(42, 60, Some(13), Some("Billing".to_string()))]).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_link_change_in_a_workstream_of_the_copy_sends_a_workstreams_event() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    let mut feed = activity::feed(&engine, None).await.unwrap();
+    wait_until_quiet(&mut feed).await;
+
+    github.add_blocker_quietly(REPOSITORY, 42, 60);
+
+    next_workstreams(&mut feed).await;
+}
+
+#[tokio::test]
+async fn a_poll_with_no_link_change_in_the_copy_sends_no_workstreams_event() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    let mut feed = activity::feed(&engine, None).await.unwrap();
+    wait_until_quiet(&mut feed).await;
+
+    github.add_blocker_quietly(REPOSITORY, 70, 60);
+
+    while let Ok(live) = tokio::time::timeout(Duration::from_millis(500), feed.next()).await {
+        assert_ne!(live.unwrap(), Live::Workstreams);
+    }
+    assert!(blockers(&engine).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_blocker_link_of_a_workstream_issue_sends_no_workstreams_event() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    let mut feed = activity::feed(&engine, None).await.unwrap();
+    wait_until_quiet(&mut feed).await;
+
+    github.add_blocker_quietly(REPOSITORY, 12, 60);
+
+    while let Ok(live) = tokio::time::timeout(Duration::from_millis(500), feed.next()).await {
+        assert_ne!(live.unwrap(), Live::Workstreams);
+    }
+    assert!(blockers(&engine).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_blocker_link_of_a_nested_workstream_sends_no_workstreams_event() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    github.add_sub_issue(REPOSITORY, 12, 13);
+    wait_for(async || (issue_numbers(&engine).await == [41, 50, 42, 13, 60]).then_some(())).await;
+    let mut feed = activity::feed(&engine, None).await.unwrap();
+    wait_until_quiet(&mut feed).await;
+
+    github.add_blocker_quietly(REPOSITORY, 13, 70);
+
+    while let Ok(live) = tokio::time::timeout(Duration::from_millis(500), feed.next()).await {
+        assert_ne!(live.unwrap(), Live::Workstreams);
+    }
+}
+
+#[tokio::test]
+async fn a_sub_issue_link_that_removes_a_blocker_from_its_workstream_changes_the_blocker_of_another_tree()
+ {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    github.add_blocker_quietly(REPOSITORY, 42, 60);
+    wait_for(async || {
+        (blockers(&engine).await == [(42, 60, Some(13), Some("Billing".to_string()))]).then_some(())
+    })
+    .await;
+
+    github.remove_sub_issue(REPOSITORY, 13, 60);
+
+    wait_for(async || (blockers(&engine).await == [(42, 60, None, None)]).then_some(())).await;
+}
+
+#[tokio::test]
+async fn a_sub_issue_link_that_moves_a_closed_task_moves_its_open_sub_issue_in_the_copy() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    github.close_issue(REPOSITORY, 41);
+    wait_for(async || {
+        issues(&engine)
+            .await
+            .iter()
+            .any(|row| (row.1, row.3.as_str()) == (41, "closed"))
+            .then_some(())
+    })
+    .await;
+
+    github.remove_sub_issue(REPOSITORY, 12, 41);
+    github.add_sub_issue(REPOSITORY, 13, 41);
+
+    wait_for(async || {
+        let rows: Vec<(i64, i64)> = issues(&engine)
+            .await
+            .iter()
+            .map(|row| (row.0, row.1))
+            .collect();
+        (rows == [(12, 42), (13, 60), (13, 41), (13, 50)]).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_sub_issue_link_of_a_closed_issue_adds_the_issue_to_the_copy() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    let since = issues_cursor(&engine).await;
+    github.close_issue(REPOSITORY, 70);
+    wait_for_poll_after(&engine, since).await;
+
+    github.add_sub_issue(REPOSITORY, 13, 70);
+
+    wait_for(async || {
+        issues(&engine)
+            .await
+            .iter()
+            .any(|row| (row.0, row.1, row.3.as_str()) == (13, 70, "closed"))
             .then_some(())
     })
     .await;

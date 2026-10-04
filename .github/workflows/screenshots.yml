@@ -36,6 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
       # The dx version must match the dioxus version in Cargo.lock.
       - run: cargo install dioxus-cli --version 0.7.10 --locked

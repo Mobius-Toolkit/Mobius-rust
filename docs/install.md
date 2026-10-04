@@ -11,6 +11,15 @@ Install these programs:
 - `tar`
 - `gh`, the GitHub CLI
 - Node 22 or later, for the Claude Code adapter
+- `sccache`, to build the Mobius repository or any repository that sets `rustc-wrapper = "sccache"`
+
+`sccache` caches the compiled dependencies, so all worktrees on the host share them. It does not cache the incremental build of the workspace crates. A Cargo build of this repository fails when `sccache` is not on `PATH`. Install `sccache` with one of these commands:
+
+```sh
+brew install sccache
+cargo install sccache --locked
+cargo binstall sccache
+```
 
 ## 2. Install Mobius
 
@@ -143,7 +152,7 @@ Mobius refuses to start when a Harness of your config, `gh`, `curl`, or `tar` is
 If necessary, set these variables in the shell before you start Mobius:
 
 - `IP` and `PORT` give the address. The default is `127.0.0.1:6363`. `IP` must be `127.0.0.1` or `0.0.0.0`.
-- If your repositories use Rust, set `CARGO_TARGET_DIR` or `RUSTC_WRAPPER=sccache`. Without one of them, each worktree builds from zero.
+- If your repositories use Rust and do not set `rustc-wrapper = "sccache"`, set `CARGO_TARGET_DIR` or `RUSTC_WRAPPER=sccache`. Without one of them, each worktree builds from zero.
 
 ## 6. Network
 

@@ -1,2 +1,5 @@
+[build]
+rustc-wrapper = "sccache"
+
 [env]
 SQLX_OFFLINE = "true"

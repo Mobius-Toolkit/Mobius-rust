@@ -28,5 +28,5 @@ mobius-ui = { workspace = true, features = ["server"] }
 png = { workspace = true }
 sqlx = { workspace = true }
 time = { workspace = true, features = ["macros"] }
-tokio = { workspace = true, features = ["macros"] }
+tokio = { workspace = true, features = ["macros", "test-util"] }
 tower = { workspace = true, features = ["util"] }

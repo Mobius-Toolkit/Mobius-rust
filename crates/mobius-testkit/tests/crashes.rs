@@ -1,7 +1,8 @@
 use std::fs;
+use std::time::Duration;
 
 use mobius_domain::{InboxKind, Session, TranscriptRow};
-use mobius_engine::{Engine, github, inbox, workstreams};
+use mobius_engine::{Engine, RESTART_DELAY, github, inbox, workstreams};
 use mobius_testkit::fake_github::{APP_SLUG, FakeGitHub};
 use mobius_testkit::{install_fake_harness, start_with_config, wait_for};
 use serde_json::Value;
@@ -82,6 +83,30 @@ async fn sessions(engine: &Engine, role: &str) -> Vec<Session> {
         .collect()
 }
 
+async fn failed_implementers(engine: &Engine) -> usize {
+    sessions(engine, "implementer")
+        .await
+        .iter()
+        .filter(|session| session.end_reason.as_deref() == Some("failed"))
+        .count()
+}
+
+async fn worker_restarts(engine: &Engine) -> i64 {
+    sqlx::query_scalar("SELECT COALESCE(SUM(worker_restarts), 0) FROM tasks")
+        .fetch_one(&engine.store.pool)
+        .await
+        .unwrap()
+}
+
+// Moves the clock over the delay of the restart, so that the test does not wait in real time.
+// Mobius registers the delay after it counts the restart.
+async fn skip_restart_delay(engine: &Engine, restarts: i64) {
+    wait_for(async || (worker_restarts(engine).await == restarts).then_some(())).await;
+    tokio::time::pause();
+    tokio::time::advance(RESTART_DELAY).await;
+    tokio::time::resume();
+}
+
 async fn lead_prompts(engine: &Engine) -> Vec<String> {
     let mut all = Vec::new();
     for session in sessions(engine, "lead_chat").await {
@@ -114,6 +139,7 @@ async fn a_worker_that_dies_starts_again_and_does_the_work() {
     let engine = connect(&data_dir, &github, &dispatch_start(), &implementer, "").await;
 
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    skip_restart_delay(&engine, 1).await;
 
     wait_for(async || (!github.pull_requests(REPOSITORY).is_empty()).then_some(())).await;
     let implementers = wait_for(async || {
@@ -144,6 +170,7 @@ async fn a_worker_that_dies_after_max_worker_restarts_goes_to_a_human() {
     .await;
 
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    skip_restart_delay(&engine, 1).await;
 
     wait_for(async || {
         github
@@ -185,6 +212,60 @@ async fn a_worker_that_dies_after_max_worker_restarts_goes_to_a_human() {
 }
 
 #[tokio::test]
+async fn a_worker_restart_waits_for_the_delay() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let implementer = "[[prompts]]\nshell = \"kill -9 $PPID\"\n";
+    let engine = connect(&data_dir, &github, &dispatch_start(), implementer, "").await;
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    wait_for(async || (worker_restarts(&engine).await == 1).then_some(())).await;
+
+    // The clock runs while the test reads the store, because a paused clock jumps to the next timer when the runtime waits for the store.
+    let rest = Duration::from_secs(10);
+    tokio::time::pause();
+    tokio::time::advance(RESTART_DELAY - rest).await;
+    tokio::time::resume();
+    assert_eq!(sessions(&engine, "implementer").await.len(), 1);
+    tokio::time::pause();
+    tokio::time::advance(rest).await;
+    tokio::time::resume();
+
+    wait_for(async || (sessions(&engine, "implementer").await.len() == 2).then_some(())).await;
+}
+
+#[tokio::test]
+async fn a_worker_that_fails_for_a_few_seconds_and_then_works_does_not_stop_the_task() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let attempts = data_dir.path().join("attempts");
+    let implementer = format!(
+        "[[prompts]]\nshell = \"echo x >> '{0}'; if [ $(wc -l < '{0}') -gt 2 ]; then {COMMIT}; else kill -9 $PPID; fi\"\n",
+        attempts.display()
+    );
+    let engine = connect(&data_dir, &github, &dispatch_start(), &implementer, "").await;
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    skip_restart_delay(&engine, 1).await;
+    skip_restart_delay(&engine, 2).await;
+
+    wait_for(async || (!github.pull_requests(REPOSITORY).is_empty()).then_some(())).await;
+    let task = engine
+        .store
+        .tasks()
+        .live(REPOSITORY, 41)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(task.state, "needs_human");
+    assert!(
+        !github
+            .labels(REPOSITORY, 41)
+            .contains(&"mobius:needs-human".to_string())
+    );
+    assert_eq!(failed_implementers(&engine).await, 2);
+}
+
+#[tokio::test]
 async fn a_task_in_needs_human_stays_in_needs_human_after_the_next_polls() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;
@@ -198,6 +279,7 @@ async fn a_task_in_needs_human_stays_in_needs_human_after_the_next_polls() {
     )
     .await;
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    skip_restart_delay(&engine, 1).await;
     wait_for(async || {
         let labels = github.labels(REPOSITORY, 41);
         (labels.contains(&"mobius:needs-human".to_string())
@@ -232,6 +314,7 @@ async fn a_comment_of_the_owner_keeps_mobius_needs_human_on_a_task_in_needs_huma
     )
     .await;
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    skip_restart_delay(&engine, 1).await;
     wait_for(async || {
         github
             .labels(REPOSITORY, 41)
@@ -277,6 +360,7 @@ async fn mobius_ready_on_a_task_in_needs_human_with_no_pull_request_starts_the_i
     .await;
     github.set_body(REPOSITORY, 41, "Plans have a price.");
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    skip_restart_delay(&engine, 1).await;
     let stopped = wait_for(async || {
         engine
             .store
@@ -352,6 +436,7 @@ async fn mobius_ready_of_the_app_on_a_task_in_needs_human_has_no_effect_when_aut
     )
     .await;
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    skip_restart_delay(&engine, 1).await;
     wait_for(async || {
         github
             .labels(REPOSITORY, 41)

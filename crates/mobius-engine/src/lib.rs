@@ -14,6 +14,7 @@ mod ends;
 pub mod gh;
 pub mod github;
 mod housekeeper;
+pub use housekeeper::RESTART_DELAY;
 mod implementer;
 pub mod inbox;
 pub mod init;

@@ -990,6 +990,23 @@ async fn a_blocker_link_of_a_workstream_issue_sends_no_workstreams_event() {
 }
 
 #[tokio::test]
+async fn a_blocker_link_of_a_nested_workstream_sends_no_workstreams_event() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_links(&data_dir, &github).await;
+    github.add_sub_issue(REPOSITORY, 12, 13);
+    wait_for(async || (issue_numbers(&engine).await == [41, 50, 42, 13, 60]).then_some(())).await;
+    let mut feed = activity::feed(&engine, None).await.unwrap();
+    wait_until_quiet(&mut feed).await;
+
+    github.add_blocker_quietly(REPOSITORY, 13, 70);
+
+    while let Ok(live) = tokio::time::timeout(Duration::from_millis(500), feed.next()).await {
+        assert_ne!(live.unwrap(), Live::Workstreams);
+    }
+}
+
+#[tokio::test]
 async fn a_sub_issue_link_that_removes_a_blocker_from_its_workstream_changes_the_blocker_of_another_tree()
  {
     let data_dir = TempDir::new().unwrap();

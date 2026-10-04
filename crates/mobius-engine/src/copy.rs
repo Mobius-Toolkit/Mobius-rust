@@ -36,6 +36,8 @@ pub(crate) async fn sync(
 // Two moves in opposite directions that keep the number of sub-issues of each parent show after the next full sync.
 // A moved issue and its descendants get another Workstream, which the blocker rows of the other trees store.
 // The tree of a Workstream has no blocker and no parent of the Workstream, so only a new sub-issue total makes its own tree stale.
+// A nested Workstream is a leaf with no blocker in the tree of its parent, so only a new parent makes the trees that hold it stale.
+// The tree of a parent that is a Workstream holds no other tree, so the trees that hold the parent stay as they are.
 pub(crate) async fn relink(
     engine: &Engine,
     repository: &Repository,
@@ -52,16 +54,23 @@ pub(crate) async fn relink(
         if old == Some(links) {
             continue;
         }
+        let is_workstream = copy.has_workstream(name, *number).await?;
+        let parent_changed = old.is_none_or(|old| old.parent != links.parent);
         if let Some(old) = old {
-            stale.extend(copy.workstreams_holding(name, *number).await?);
-            if old.sub_issues != links.sub_issues && copy.has_workstream(name, *number).await? {
+            if !is_workstream || parent_changed {
+                stale.extend(copy.workstreams_holding(name, *number).await?);
+            }
+            if is_workstream && old.sub_issues != links.sub_issues {
                 stale.insert(*number);
             }
         }
-        if let Some(parent) = links.parent {
-            stale.extend(copy.workstreams_holding(name, parent).await?);
+        if let Some(parent) = links.parent
+            && (!is_workstream || parent_changed)
+        {
             if copy.has_workstream(name, parent).await? {
                 stale.insert(parent);
+            } else {
+                stale.extend(copy.workstreams_holding(name, parent).await?);
             }
         }
     }

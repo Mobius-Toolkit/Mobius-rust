@@ -217,7 +217,7 @@ async fn a_github_error_shows_its_status_and_message_in_the_stop_event() {
         "max_worker_restarts = 1",
     )
     .await;
-    github.fail_pull_request_creation(REPOSITORY, 403, "API rate limit exceeded");
+    github.fail_pull_request_creation(REPOSITORY, 403, "API rate limit exceeded", &[]);
 
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
 
@@ -231,6 +231,43 @@ async fn a_github_error_shows_its_status_and_message_in_the_stop_event() {
     assert!(
         prompt.contains(
             "The last error ends with these lines:\n\n```\nGitHub 403: API rate limit exceeded\n```"
+        ),
+        "{prompt}"
+    );
+}
+
+#[tokio::test]
+async fn a_github_error_shows_the_messages_of_its_errors_in_the_stop_event() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let implementer = format!("[[prompts]]\nshell = \"{COMMIT}\"\n");
+    let engine = connect(
+        &data_dir,
+        &github,
+        &dispatch_start(),
+        &implementer,
+        "max_worker_restarts = 1",
+    )
+    .await;
+    github.fail_pull_request_creation(
+        REPOSITORY,
+        422,
+        "Validation Failed",
+        &["A pull request already exists for owner:branch."],
+    );
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    let prompt = wait_for(async || {
+        lead_prompts(&engine)
+            .await
+            .into_iter()
+            .find(|prompt| prompt.contains(" stop of #41 \"Add plan model\":"))
+    })
+    .await;
+    assert!(
+        prompt.contains(
+            "GitHub 422: Validation Failed: A pull request already exists for owner:branch."
         ),
         "{prompt}"
     );
@@ -274,7 +311,7 @@ async fn a_worker_that_fails_in_a_rate_limit_starts_again_after_the_reset() {
     let github = FakeGitHub::start().await;
     let implementer = format!("[[prompts]]\nshell = \"{COMMIT}\"\n");
     let engine = connect(&data_dir, &github, &dispatch_start(), &implementer, "").await;
-    github.fail_pull_request_creation(REPOSITORY, 403, "API rate limit exceeded");
+    github.fail_pull_request_creation(REPOSITORY, 403, "API rate limit exceeded", &[]);
     let reset = OffsetDateTime::now_utc().unix_timestamp() + 5;
     github.exhaust_rate_limit(reset);
 

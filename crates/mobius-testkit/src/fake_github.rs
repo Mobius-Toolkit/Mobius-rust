@@ -160,8 +160,8 @@ struct Records {
     failed_sub_issues: HashSet<(String, i64)>,
     // The Unix time at which the exhausted core rate limit resets. Without it, the limit has calls left.
     rate_limit_reset: Option<i64>,
-    // The repositories whose pull request creation fails, with the status and the message.
-    failed_pull_requests: HashMap<String, (StatusCode, String)>,
+    // The repositories whose pull request creation fails, with the status, the message, and the messages of the errors.
+    failed_pull_requests: HashMap<String, (StatusCode, String, Vec<String>)>,
     // The permissions of each App and of its installation by App id. An App without an entry has `DEFAULT_PERMISSIONS`.
     app_permissions: HashMap<i64, HashMap<String, String>>,
     installation_permissions: HashMap<i64, HashMap<String, String>>,
@@ -638,10 +638,20 @@ impl FakeGitHub {
         self.state.lock().unwrap().rate_limit_reset = Some(reset);
     }
 
-    pub fn fail_pull_request_creation(&self, repository: &str, status: u16, message: &str) {
+    pub fn fail_pull_request_creation(
+        &self,
+        repository: &str,
+        status: u16,
+        message: &str,
+        errors: &[&str],
+    ) {
         self.state.lock().unwrap().failed_pull_requests.insert(
             repository.to_string(),
-            (StatusCode::from_u16(status).unwrap(), message.to_string()),
+            (
+                StatusCode::from_u16(status).unwrap(),
+                message.to_string(),
+                errors.iter().map(|error| error.to_string()).collect(),
+            ),
         );
     }
 
@@ -1684,8 +1694,16 @@ async fn create_pull_request(
 ) -> Response {
     let repository = format!("{owner}/{repo}");
     let mut records = state.lock().unwrap();
-    if let Some((status, message)) = records.failed_pull_requests.get(&repository) {
-        return (*status, Json(json!({ "message": message }))).into_response();
+    if let Some((status, message, errors)) = records.failed_pull_requests.get(&repository) {
+        let errors: Vec<Value> = errors
+            .iter()
+            .map(|error| json!({ "resource": "PullRequest", "code": "custom", "message": error }))
+            .collect();
+        return (
+            *status,
+            Json(json!({ "message": message, "errors": errors })),
+        )
+            .into_response();
     }
     let number = records.insert_pull_request(&repository, new);
     let mut json = pull_request_json(&records, &repository, number);

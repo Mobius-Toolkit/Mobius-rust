@@ -16,7 +16,7 @@ use time::format_description::well_known::Rfc3339;
 
 const PAGE_SIZE: usize = 100;
 
-// The text of `octocrab::Error::GitHub` is only "GitHub", so this type adds the status and the message of GitHub.
+// The text of `octocrab::Error::GitHub` is only "GitHub", so this type adds the status, the message, and the messages of the errors of GitHub.
 #[derive(Debug)]
 pub struct Failure(String);
 
@@ -31,11 +31,21 @@ impl Error for Failure {}
 impl From<octocrab::Error> for Failure {
     fn from(error: octocrab::Error) -> Failure {
         match error {
-            octocrab::Error::GitHub { source, .. } => Failure(format!(
-                "GitHub {}: {}",
-                source.status_code.as_u16(),
-                source.message
-            )),
+            octocrab::Error::GitHub { source, .. } => {
+                let mut text =
+                    format!("GitHub {}: {}", source.status_code.as_u16(), source.message);
+                for error in source.errors.iter().flatten() {
+                    let detail = match error {
+                        serde_json::Value::String(detail) => Some(detail.as_str()),
+                        error => error["message"].as_str(),
+                    };
+                    if let Some(detail) = detail {
+                        text.push_str(": ");
+                        text.push_str(detail);
+                    }
+                }
+                Failure(text)
+            }
             error => Failure(error.to_string()),
         }
     }

@@ -41,7 +41,7 @@ jobs:
       - run: cargo install dioxus-cli --version 0.7.10 --locked
       - run: dx bundle --web --release -p mobius --out-dir dist
       # Each test starts its own Chrome. One test at a time keeps the Chrome starts from competing for the runner.
-      - run: cargo test -p mobius-testkit --test screenshots -- --ignored --test-threads=1
+      - run: cargo test -p mobius-testkit --test it -- screenshots:: --ignored --test-threads=1
         env:
           DIOXUS_PUBLIC_PATH: ${{ github.workspace }}/dist/public
           MOBIUS_VERSION: v0.1.0

@@ -1,6 +1,3 @@
-use std::env;
-use std::sync::Once;
-
 use dioxus::server::axum::body::{Body, to_bytes};
 use dioxus::server::axum::http::{Request, StatusCode, header};
 use dioxus::server::axum::{Extension, Router};
@@ -12,24 +9,10 @@ use mobius_testkit::start;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-static PUBLIC_PATH: Once = Once::new();
-
-// The router serves the static files of `crates/mobius/public`.
-fn public_path() {
-    PUBLIC_PATH.call_once(|| {
-        // SAFETY: no other thread of this test binary reads the environment
-        // while the variable is set.
-        unsafe {
-            env::set_var(
-                "DIOXUS_PUBLIC_PATH",
-                concat!(env!("CARGO_MANIFEST_DIR"), "/../mobius/public"),
-            )
-        };
-    });
-}
+use crate::public_path;
 
 async fn app() -> (Router, TempDir, FakeGitHub, Engine) {
-    public_path();
+    public_path::set();
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;
     let engine = start(data_dir.path(), "correct horse", &github.url).await;

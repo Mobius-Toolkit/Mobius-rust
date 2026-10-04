@@ -242,6 +242,7 @@ async fn many_release_reads_make_one_call_to_github() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     assert_eq!(github.latest_release_calls(), 1);
+    // The App does not exist before `convert_manifest`, so no token exists for these calls.
     assert_eq!(
         github.unauthenticated_requests(),
         ["POST /app-manifests/manifest-code/conversions"]

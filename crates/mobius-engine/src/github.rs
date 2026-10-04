@@ -151,10 +151,15 @@ pub(crate) fn spawn_release_check(engine: Engine) {
                 continue;
             };
             match repository.latest_release().await {
-                Ok(release) => *engine.latest_release.lock().unwrap() = Some(release.tag_name),
-                Err(error) => eprintln!("mobius: release check: {error}"),
+                Ok(release) => {
+                    *engine.latest_release.lock().unwrap() = Some(release.tag_name);
+                    tokio::time::sleep(RELEASE_CHECK_INTERVAL).await;
+                }
+                Err(error) => {
+                    eprintln!("mobius: release check: {error}");
+                    tokio::time::sleep(engine.config.poll_interval).await;
+                }
             }
-            tokio::time::sleep(RELEASE_CHECK_INTERVAL).await;
         }
     });
 }

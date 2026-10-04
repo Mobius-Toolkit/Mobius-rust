@@ -148,13 +148,20 @@ async fn changed_issues(
     // At the first poll of a repository, Mobius cannot see which event is new, and the UI reads the whole list.
     let first_poll = cursor.since.is_none();
     let mut workstreams_changed = false;
+    let until = page
+        .issues
+        .iter()
+        .map(|issue| issue.updated_at)
+        .max()
+        .or(cursor.since);
     for issue in &page.issues {
         if issue.pull_request.is_some() {
             dispatch::pull_request_comments(engine, repository, issue.number, cursor.since).await?;
             continue;
         }
         if issue.has_label(WORKING_LABEL) || issue.has_label(NEEDS_HUMAN_LABEL) {
-            dispatch::comment_events(engine, app_slug, repository, issue, cursor.since).await?;
+            dispatch::comment_events(engine, app_slug, repository, issue, cursor.since, until)
+                .await?;
         }
         if !issue.has_label(NO_WORKSTREAM_LABEL) {
             triager::stop(engine, app_slug, repository, issue.number).await?;
@@ -227,15 +234,9 @@ async fn changed_issues(
     if workstreams_changed {
         engine.broadcast(Live::Workstreams);
     }
-    let since = page
-        .issues
-        .iter()
-        .map(|issue| issue.updated_at)
-        .max()
-        .or(cursor.since);
     engine
         .store
         .sync_cursors()
-        .set(name, ISSUES, since, page.etag.as_deref())
+        .set(name, ISSUES, until, page.etag.as_deref())
         .await
 }

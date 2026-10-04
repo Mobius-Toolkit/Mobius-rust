@@ -136,12 +136,15 @@ pub(crate) async fn comment_events(
     repository: &Repository,
     issue: &Issue,
     since: Option<OffsetDateTime>,
+    until: Option<OffsetDateTime>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let name = &repository.full_name;
     let Some(task) = engine.store.tasks().live(name, issue.number).await? else {
         return Ok(());
     };
-    let comments = repository.issue_comments(issue.number).await?;
+    let mut comments = repository.issue_comments(issue.number).await?;
+    // A comment after `until` came after the list of issues. The next poll reads it, because its cursor is `until`.
+    comments.retain(|comment| until.is_none_or(|until| comment.created_at <= until));
     let authors = comments
         .iter()
         .map(|comment| (comment.user.login.as_str(), comment.created_at));

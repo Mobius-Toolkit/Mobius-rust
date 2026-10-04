@@ -163,17 +163,14 @@ impl WorkstreamCopy<'_> {
         .await?)
     }
 
-    // Gives the Workstreams of the repository that are the issue, or hold it as a task of the repository.
+    // Gives the Workstreams of the repository that hold the issue as a task of the repository.
     pub async fn workstreams_holding(
         &self,
         repository: &str,
         number: i64,
     ) -> Result<Vec<i64>, Box<dyn Error + Send + Sync>> {
         Ok(sqlx::query_scalar!(
-            r#"SELECT number AS "workstream!: i64" FROM copied_workstreams
-               WHERE repository = ?1 AND number = ?2
-               UNION
-               SELECT workstream AS "workstream!: i64" FROM copied_issues
+            r#"SELECT workstream AS "workstream!: i64" FROM copied_issues
                WHERE repository = ?1 AND number = ?2
                  AND substr(repository_url, -length(?1) - 7) = '/repos/' || ?1 COLLATE NOCASE"#,
             repository,

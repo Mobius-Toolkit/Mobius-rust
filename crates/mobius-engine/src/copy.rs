@@ -35,6 +35,7 @@ pub(crate) async fn sync(
 // The number of sub-issues of a parent shows a link of a closed issue, which the query of the links does not read.
 // Two moves in opposite directions that keep the number of sub-issues of each parent show after the next full sync.
 // A moved issue and its descendants get another Workstream, which the blocker rows of the other trees store.
+// The tree of a Workstream has no blocker and no parent of the Workstream, so only a new sub-issue total makes its own tree stale.
 pub(crate) async fn relink(
     engine: &Engine,
     repository: &Repository,
@@ -51,11 +52,17 @@ pub(crate) async fn relink(
         if old == Some(links) {
             continue;
         }
-        if old.is_some() {
+        if let Some(old) = old {
             stale.extend(copy.workstreams_holding(name, *number).await?);
+            if old.sub_issues != links.sub_issues && copy.has_workstream(name, *number).await? {
+                stale.insert(*number);
+            }
         }
         if let Some(parent) = links.parent {
             stale.extend(copy.workstreams_holding(name, parent).await?);
+            if copy.has_workstream(name, parent).await? {
+                stale.insert(parent);
+            }
         }
     }
     let mut moved = BTreeSet::new();

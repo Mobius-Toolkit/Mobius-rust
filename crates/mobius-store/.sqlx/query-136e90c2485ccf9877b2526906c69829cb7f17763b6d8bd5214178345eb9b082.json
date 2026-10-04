@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, role, harness, model, organization, repository, workstream, acp_session_id,\n                      started_at AS \"started_at: OffsetDateTime\",\n                      ended_at AS \"ended_at: OffsetDateTime\", end_reason, queue_reason, issue, parent\n               FROM sessions WHERE organization = ? AND repository = ? AND workstream = ? ORDER BY id",
+  "query": "SELECT s.id, s.role, s.harness, s.model, s.organization, s.repository, s.workstream, s.acp_session_id,\n                      s.started_at AS \"started_at: OffsetDateTime\",\n                      s.ended_at AS \"ended_at: OffsetDateTime\", s.end_reason, s.queue_reason, s.issue, s.parent, s.phase,\n                      w.title AS workstream_title, i.title AS issue_title,\n                      (SELECT t.pull_request FROM tasks t\n                       WHERE t.repository = s.repository AND t.issue = s.issue\n                       ORDER BY t.id DESC LIMIT 1) AS pull_request\n               FROM sessions s\n               LEFT JOIN copied_workstreams w ON w.repository = s.repository AND w.number = s.workstream\n               LEFT JOIN copied_issues i\n                 ON i.repository = s.repository AND i.workstream = s.workstream AND i.number = s.issue\n               WHERE s.ended_at IS NULL ORDER BY s.id",
   "describe": {
     "columns": [
       {
@@ -156,10 +156,54 @@
             "name": "parent"
           }
         }
+      },
+      {
+        "name": "phase",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "phase"
+          }
+        }
+      },
+      {
+        "name": "workstream_title",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "copied_workstreams",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "issue_title",
+        "ordinal": 16,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "copied_issues",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "pull_request",
+        "ordinal": 17,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "pull_request"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 0
     },
     "nullable": [
       false,
@@ -175,8 +219,12 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "8e2886b26f28204b4dd4b80c3d1394b6b257726d977cb055e71e17ecdf0649a8"
+  "hash": "136e90c2485ccf9877b2526906c69829cb7f17763b6d8bd5214178345eb9b082"
 }

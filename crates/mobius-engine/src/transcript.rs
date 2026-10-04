@@ -42,7 +42,7 @@ fn line(row: TranscriptRow, folded: bool) -> Result<TranscriptLine, serde_json::
         raw: row.json,
     };
     match line.kind.as_str() {
-        "prompt" => first_line(&mut line, json["text"].as_str().unwrap_or_default()),
+        "prompt" | "check" => first_line(&mut line, json["text"].as_str().unwrap_or_default()),
         "mcp_call" => {
             line.text = format!("mobius · {}", json["tool"].as_str().unwrap_or_default());
             let outcome = json.get("error").unwrap_or(&json["result"]);

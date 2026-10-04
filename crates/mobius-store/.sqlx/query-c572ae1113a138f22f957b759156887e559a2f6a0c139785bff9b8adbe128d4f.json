@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE sessions SET started_at = ?, queue_reason = NULL WHERE id = ?\n               RETURNING id AS \"id!\", role, harness, model, organization, repository, workstream, acp_session_id,\n                         started_at AS \"started_at: OffsetDateTime\",\n                         ended_at AS \"ended_at: OffsetDateTime\", end_reason, queue_reason, issue, parent",
+  "query": "SELECT id, role, harness, model, organization, repository, workstream, acp_session_id,\n                      started_at AS \"started_at: OffsetDateTime\",\n                      ended_at AS \"ended_at: OffsetDateTime\", end_reason, queue_reason, issue, parent, phase\n               FROM sessions WHERE organization = ? AND repository = ? AND workstream = ? ORDER BY id",
   "describe": {
     "columns": [
       {
-        "name": "id!",
+        "name": "id",
         "ordinal": 0,
         "type_info": "Integer",
         "origin": {
@@ -156,10 +156,21 @@
             "name": "parent"
           }
         }
+      },
+      {
+        "name": "phase",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "phase"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 3
     },
     "nullable": [
       false,
@@ -175,8 +186,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "2ebecc7cd67ad488c5bb18200f716d4d34a744002f79f53e40f9ab4c8c4d67fe"
+  "hash": "c572ae1113a138f22f957b759156887e559a2f6a0c139785bff9b8adbe128d4f"
 }

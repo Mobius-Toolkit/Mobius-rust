@@ -260,6 +260,8 @@ pub struct Session {
     pub issue: Option<i64>,
     // The session of the agent that started this session. `None` when no agent started it.
     pub parent: Option<i64>,
+    // The step of the work that the session does now. The session holds its slot in each step.
+    pub phase: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -483,6 +485,7 @@ mod tests {
                 queue_reason: None,
                 issue: None,
                 parent,
+                phase: None,
             },
             role: String::new(),
             title: String::new(),

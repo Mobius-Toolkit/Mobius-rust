@@ -106,13 +106,14 @@ async fn sessions(engine: &Engine, role: &str) -> Vec<Session> {
 }
 
 // Moves the clock over the delay of the restart, so that the test does not wait in real time.
+// Mobius registers the delay after it counts the restart.
 async fn skip_restart_delay(engine: &Engine) {
     wait_for(async || {
-        sessions(engine, "reviewer")
+        let restarts: i64 = sqlx::query_scalar("SELECT SUM(worker_restarts) FROM tasks")
+            .fetch_one(&engine.store.pool)
             .await
-            .iter()
-            .any(|session| session.end_reason.as_deref() == Some("failed"))
-            .then_some(())
+            .unwrap();
+        (restarts == 1).then_some(())
     })
     .await;
     tokio::time::pause();

@@ -91,9 +91,17 @@ async fn failed_implementers(engine: &Engine) -> usize {
         .count()
 }
 
+async fn worker_restarts(engine: &Engine) -> i64 {
+    sqlx::query_scalar("SELECT COALESCE(SUM(worker_restarts), 0) FROM tasks")
+        .fetch_one(&engine.store.pool)
+        .await
+        .unwrap()
+}
+
 // Moves the clock over the delay of the restart, so that the test does not wait in real time.
-async fn skip_restart_delay(engine: &Engine, failed: usize) {
-    wait_for(async || (failed_implementers(engine).await == failed).then_some(())).await;
+// Mobius registers the delay after it counts the restart.
+async fn skip_restart_delay(engine: &Engine, restarts: i64) {
+    wait_for(async || (worker_restarts(engine).await == restarts).then_some(())).await;
     tokio::time::pause();
     tokio::time::advance(RESTART_DELAY).await;
     tokio::time::resume();
@@ -210,12 +218,16 @@ async fn a_worker_restart_waits_for_the_delay() {
     let implementer = "[[prompts]]\nshell = \"kill -9 $PPID\"\n";
     let engine = connect(&data_dir, &github, &dispatch_start(), implementer, "").await;
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
-    wait_for(async || (failed_implementers(&engine).await == 1).then_some(())).await;
+    wait_for(async || (worker_restarts(&engine).await == 1).then_some(())).await;
 
+    // The clock runs while the test reads the store, because a paused clock jumps to the next timer when the runtime waits for the store.
+    let rest = Duration::from_secs(10);
     tokio::time::pause();
-    tokio::time::advance(RESTART_DELAY - Duration::from_secs(1)).await;
+    tokio::time::advance(RESTART_DELAY - rest).await;
+    tokio::time::resume();
     assert_eq!(sessions(&engine, "implementer").await.len(), 1);
-    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::time::pause();
+    tokio::time::advance(rest).await;
     tokio::time::resume();
 
     wait_for(async || (sessions(&engine, "implementer").await.len() == 2).then_some(())).await;

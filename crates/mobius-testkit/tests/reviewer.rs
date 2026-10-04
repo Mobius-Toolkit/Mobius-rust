@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use mobius_domain::{Author, InboxKind, Session, TranscriptRow};
 use mobius_engine::config::Config;
 use mobius_engine::{Engine, chat, github, inbox, workstreams};
@@ -85,10 +83,7 @@ async fn connect_with(
         "correct horse",
         &github.url,
         extra_config,
-        |config| {
-            config.lead_idle_timeout = Duration::from_secs(60);
-            adjust(config);
-        },
+        adjust,
     )
     .await;
     github::convert_manifest(&engine, "manifest-code")

@@ -2,14 +2,13 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::time::Duration;
 
 use mobius_domain::{InboxKind, Session, TranscriptRow};
 use mobius_engine::{Engine, github, inbox, tasks, workstreams};
 use mobius_testkit::fake_github::{
     BOT_USER_ID, CheckRun, FakeGitHub, INSTALLATION_TOKEN, PullRequest,
 };
-use mobius_testkit::{git, install_fake_harness, start_with, wait_for};
+use mobius_testkit::{git, install_fake_harness, start_with_config, wait_for};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -62,14 +61,8 @@ async fn connect(
         "devin",
         &format!("{IMPLEMENTER_OPTIONS}\n{implementer}"),
     );
-    let engine = start_with(
-        data_dir.path(),
-        "correct horse",
-        &github.url,
-        extra_config,
-        |config| config.lead_idle_timeout = Duration::from_secs(60),
-    )
-    .await;
+    let engine =
+        start_with_config(data_dir.path(), "correct horse", &github.url, extra_config).await;
     github::convert_manifest(&engine, "manifest-code")
         .await
         .unwrap();
@@ -393,7 +386,7 @@ async fn a_second_task_of_the_issue_gets_the_next_free_branch() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;
     let lead = format!(
-        "[[prompts]]\nwhen = \"dispatch of #41\"\n{START}\n[[prompts]]\nwhen = \"cannot_do on #41\"\ncall = {{ tool = \"decline\", arguments = {{ n = 41, reason = \"Split it.\" }} }}\n"
+        "[[prompts]]\nwhen = \"cannot_do on #41\"\ncall = {{ tool = \"decline\", arguments = {{ n = 41, reason = \"Split it.\" }} }}\n[[prompts]]\nwhen = \"dispatch of #41\"\n{START}\n"
     );
     let implementer =
         format!("[[prompts]]\n{CANNOT_DO}\n[[prompts]]\nwhen = \"Start again.\"\n{COMMIT}");

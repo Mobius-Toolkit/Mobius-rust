@@ -699,6 +699,26 @@ async fn a_closed_blocker_is_removed_from_the_copy() {
 }
 
 #[tokio::test]
+async fn a_closed_blocker_does_not_read_the_tree_of_the_blocked_task_again() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = copied_blocker(&data_dir, &github).await;
+    let mut feed = activity::feed(&engine, None).await.unwrap();
+    wait_until_quiet(&mut feed).await;
+
+    github.close_issue(REPOSITORY, 60);
+
+    wait_for(async || blockers(&engine).await.is_empty().then_some(())).await;
+    let mut events = 0;
+    while let Ok(live) = tokio::time::timeout(Duration::from_millis(500), feed.next()).await {
+        if live.unwrap() == Live::Workstreams {
+            events += 1;
+        }
+    }
+    assert_eq!(events, 1);
+}
+
+#[tokio::test]
 async fn a_new_title_of_a_workstream_changes_the_title_in_the_blockers_of_the_copy() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;

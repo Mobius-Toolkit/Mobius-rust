@@ -38,6 +38,7 @@ pub(crate) async fn sync(
 // The tree of a Workstream has no blocker and no parent of the Workstream, so only a new sub-issue total makes its own tree stale.
 // A nested Workstream is a leaf with no blocker in the tree of its parent, so only a new parent makes the trees that hold it stale.
 // The tree of a parent that is a Workstream holds no other tree, so the trees that hold the parent stay as they are.
+// A blocker that closes is not a key of the links. The `since` poll sees the closed issue, and `update` removes its rows.
 pub(crate) async fn relink(
     engine: &Engine,
     repository: &Repository,
@@ -51,7 +52,17 @@ pub(crate) async fn relink(
     let mut stale = BTreeSet::new();
     for (number, links) in &after {
         let old = before.get(number);
-        if old == Some(links) {
+        if old.is_some_and(|old| {
+            let open_blockers: BTreeSet<i64> = old
+                .blockers
+                .iter()
+                .filter(|blocker| after.contains_key(blocker))
+                .copied()
+                .collect();
+            old.parent == links.parent
+                && old.sub_issues == links.sub_issues
+                && open_blockers == links.blockers
+        }) {
             continue;
         }
         let is_workstream = copy.has_workstream(name, *number).await?;

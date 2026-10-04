@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::path::Path;
 use std::pin::Pin;
+use std::time::Instant;
 
 use mobius_domain::{Live, organization};
 use mobius_github::{PullRequest, Repository};
@@ -26,6 +27,8 @@ pub(crate) const CONFLICT_ROUND: &str = "conflict_round";
 // GitHub allows a maximum of 65535 characters in the summary of a check run.
 const LOG_TAIL: usize = 60_000;
 const DISK_FULL: &str = "No space left on device";
+const WAITS_FOR_CHECK_SLOT: &str = "waits for a check slot";
+const RUNS_CHECK: &str = "runs .mobius/check";
 
 #[derive(Clone)]
 struct Job {
@@ -723,16 +726,7 @@ async fn turns_and_checks(
             return Ok(Some(Outcome::CannotDo(reason)));
         }
         let check = loop {
-            let check = {
-                let _check = engine.checks.acquire().await?;
-                mobius_runner::check(
-                    &engine.config.data_dir,
-                    worktree,
-                    &engine.harness_path,
-                    engine.config.check_timeout,
-                )
-                .await?
-            };
+            let check = local_check(engine, worktree, recorder).await?;
             match check {
                 Check::Failed(log) if log.contains(DISK_FULL) => {
                     housekeeper::wait_for_disk(
@@ -759,6 +753,53 @@ async fn turns_and_checks(
             "The local check `.mobius/check` failed. Fix the code and commit your work. The output ends with these lines:\n\n```\n{log}\n```"
         );
     }
+}
+
+async fn local_check(
+    engine: &Engine,
+    worktree: &Path,
+    recorder: &Recorder,
+) -> Result<Check, Box<dyn Error + Send + Sync>> {
+    let session = recorder.session();
+    let _slot = match engine.checks.try_acquire() {
+        Ok(slot) => slot,
+        Err(_) => {
+            show_phase(engine, session, Some(WAITS_FOR_CHECK_SLOT)).await?;
+            recorder.check(WAITS_FOR_CHECK_SLOT).await?;
+            engine.checks.acquire().await?
+        }
+    };
+    show_phase(engine, session, Some(RUNS_CHECK)).await?;
+    recorder.check(RUNS_CHECK).await?;
+    let started = Instant::now();
+    let check = mobius_runner::check(
+        &engine.config.data_dir,
+        worktree,
+        &engine.harness_path,
+        engine.config.check_timeout,
+    )
+    .await?;
+    let elapsed = started.elapsed();
+    let result = match &check {
+        Check::Passed => "passed",
+        Check::Failed(_) if elapsed >= engine.config.check_timeout => "timed out",
+        Check::Failed(_) => "failed",
+    };
+    recorder
+        .check(&format!(".mobius/check {result} in {elapsed:.1?}"))
+        .await?;
+    show_phase(engine, session, None).await?;
+    Ok(check)
+}
+
+async fn show_phase(
+    engine: &Engine,
+    session: i64,
+    phase: Option<&str>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let session = engine.store.sessions().set_phase(session, phase).await?;
+    engine.broadcast(Live::Agent(agents::node(session)));
+    Ok(())
 }
 
 // Gives the reason when the Implementer calls `cannot_do`.

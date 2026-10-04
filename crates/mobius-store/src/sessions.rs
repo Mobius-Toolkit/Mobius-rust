@@ -23,6 +23,7 @@ struct Row {
     queue_reason: Option<String>,
     issue: Option<i64>,
     parent: Option<i64>,
+    phase: Option<String>,
 }
 
 impl Row {
@@ -46,6 +47,7 @@ impl Row {
             queue_reason: self.queue_reason,
             issue: self.issue,
             parent: self.parent,
+            phase: self.phase,
         })
     }
 }
@@ -65,6 +67,7 @@ struct OpenRow {
     queue_reason: Option<String>,
     issue: Option<i64>,
     parent: Option<i64>,
+    phase: Option<String>,
     workstream_title: Option<String>,
     issue_title: Option<String>,
     pull_request: Option<i64>,
@@ -87,6 +90,7 @@ impl OpenRow {
             queue_reason: self.queue_reason,
             issue: self.issue,
             parent: self.parent,
+            phase: self.phase,
         }
         .session()?;
         Ok(OpenSession {
@@ -130,7 +134,7 @@ impl Sessions<'_> {
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                RETURNING id AS "id!", role, harness, model, organization, repository, workstream, acp_session_id,
                          started_at AS "started_at: OffsetDateTime",
-                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent"#,
+                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent, phase"#,
             session.role,
             harness,
             session.model,
@@ -171,7 +175,7 @@ impl Sessions<'_> {
             r#"UPDATE sessions SET queue_reason = ? WHERE id = ?
                RETURNING id AS "id!", role, harness, model, organization, repository, workstream, acp_session_id,
                          started_at AS "started_at: OffsetDateTime",
-                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent"#,
+                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent, phase"#,
             reason,
             id
         )
@@ -189,7 +193,26 @@ impl Sessions<'_> {
             r#"UPDATE sessions SET queue_reason = NULL WHERE id = ?
                RETURNING id AS "id!", role, harness, model, organization, repository, workstream, acp_session_id,
                          started_at AS "started_at: OffsetDateTime",
-                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent"#,
+                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent, phase"#,
+            id
+        )
+        .fetch_one(self.pool)
+        .await?
+        .session()
+    }
+
+    pub async fn set_phase(
+        &self,
+        id: i64,
+        phase: Option<&str>,
+    ) -> Result<Session, Box<dyn Error + Send + Sync>> {
+        sqlx::query_as!(
+            Row,
+            r#"UPDATE sessions SET phase = ? WHERE id = ?
+               RETURNING id AS "id!", role, harness, model, organization, repository, workstream, acp_session_id,
+                         started_at AS "started_at: OffsetDateTime",
+                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent, phase"#,
+            phase,
             id
         )
         .fetch_one(self.pool)
@@ -204,7 +227,7 @@ impl Sessions<'_> {
             r#"UPDATE sessions SET started_at = ?, queue_reason = NULL WHERE id = ?
                RETURNING id AS "id!", role, harness, model, organization, repository, workstream, acp_session_id,
                          started_at AS "started_at: OffsetDateTime",
-                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent"#,
+                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent, phase"#,
             started_at,
             id
         )
@@ -221,10 +244,10 @@ impl Sessions<'_> {
         let ended_at = OffsetDateTime::now_utc();
         sqlx::query_as!(
             Row,
-            r#"UPDATE sessions SET ended_at = ?, end_reason = ?, queue_reason = NULL WHERE id = ?
+            r#"UPDATE sessions SET ended_at = ?, end_reason = ?, queue_reason = NULL, phase = NULL WHERE id = ?
                RETURNING id AS "id!", role, harness, model, organization, repository, workstream, acp_session_id,
                          started_at AS "started_at: OffsetDateTime",
-                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent"#,
+                         ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent, phase"#,
             ended_at,
             reason,
             id
@@ -247,7 +270,7 @@ impl Sessions<'_> {
             OpenRow,
             r#"SELECT s.id, s.role, s.harness, s.model, s.organization, s.repository, s.workstream, s.acp_session_id,
                       s.started_at AS "started_at: OffsetDateTime",
-                      s.ended_at AS "ended_at: OffsetDateTime", s.end_reason, s.queue_reason, s.issue, s.parent,
+                      s.ended_at AS "ended_at: OffsetDateTime", s.end_reason, s.queue_reason, s.issue, s.parent, s.phase,
                       w.title AS workstream_title, i.title AS issue_title,
                       (SELECT t.pull_request FROM tasks t
                        WHERE t.repository = s.repository AND t.issue = s.issue
@@ -268,7 +291,7 @@ impl Sessions<'_> {
             Row,
             r#"SELECT id, role, harness, model, organization, repository, workstream, acp_session_id,
                       started_at AS "started_at: OffsetDateTime",
-                      ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent
+                      ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent, phase
                FROM sessions WHERE id = ?"#,
             id
         )
@@ -285,7 +308,7 @@ impl Sessions<'_> {
             Row,
             r#"SELECT id, role, harness, model, organization, repository, workstream, acp_session_id,
                       started_at AS "started_at: OffsetDateTime",
-                      ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent
+                      ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent, phase
                FROM sessions WHERE role = ? ORDER BY id"#,
             role
         )
@@ -304,7 +327,7 @@ impl Sessions<'_> {
             Row,
             r#"SELECT id, role, harness, model, organization, repository, workstream, acp_session_id,
                       started_at AS "started_at: OffsetDateTime",
-                      ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent
+                      ended_at AS "ended_at: OffsetDateTime", end_reason, queue_reason, issue, parent, phase
                FROM sessions WHERE organization = ? AND repository = ? AND workstream = ? ORDER BY id"#,
             organization,
             repository,

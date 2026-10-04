@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO sessions (role, harness, model, organization, repository, workstream, issue, parent, started_at)\n               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)\n               RETURNING id AS \"id!\", role, harness, model, organization, repository, workstream, acp_session_id,\n                         started_at AS \"started_at: OffsetDateTime\",\n                         ended_at AS \"ended_at: OffsetDateTime\", end_reason, queue_reason, issue, parent",
+  "query": "UPDATE sessions SET ended_at = ?, end_reason = ?, queue_reason = NULL, phase = NULL WHERE id = ?\n               RETURNING id AS \"id!\", role, harness, model, organization, repository, workstream, acp_session_id,\n                         started_at AS \"started_at: OffsetDateTime\",\n                         ended_at AS \"ended_at: OffsetDateTime\", end_reason, queue_reason, issue, parent, phase",
   "describe": {
     "columns": [
       {
@@ -156,10 +156,21 @@
             "name": "parent"
           }
         }
+      },
+      {
+        "name": "phase",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "phase"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 9
+      "Right": 3
     },
     "nullable": [
       false,
@@ -175,8 +186,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "555473f6b3acf1a68763fdc534ca74ffeb4e259a8173805abbbeec8c801329ac"
+  "hash": "d0ba6857b3e4de5873e8b674d3cf1d45ba886775316a3d4dbde8b137ea30bb92"
 }

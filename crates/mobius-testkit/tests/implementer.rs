@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use mobius_domain::{InboxKind, Session, TranscriptRow};
-use mobius_engine::{Engine, github, inbox, tasks, workstreams};
+use mobius_engine::{Engine, agents, github, inbox, tasks, workstreams};
 use mobius_testkit::fake_github::{
     BOT_USER_ID, CheckRun, FakeGitHub, INSTALLATION_TOKEN, PullRequest,
 };
@@ -541,6 +541,12 @@ async fn after_max_check_attempts_mobius_pushes_marks_the_check_run_as_failed_an
     let prompts = prompts(&transcript(&engine, session.id).await);
     assert_eq!(prompts.len(), 3, "{prompts:?}");
     assert!(prompts[2].contains("tests failed"), "{}", prompts[2]);
+    let timeouts = transcript(&engine, session.id)
+        .await
+        .into_iter()
+        .filter(|row| row.kind == "check" && row.json.contains(".mobius/check timed out in "))
+        .count();
+    assert_eq!(timeouts, 3);
 }
 
 #[tokio::test]
@@ -723,5 +729,114 @@ async fn with_one_check_slot_the_local_checks_do_not_run_at_the_same_time() {
     assert_eq!(
         fs::read_to_string(&log).unwrap(),
         "start\nend\nstart\nend\n"
+    );
+}
+
+#[tokio::test]
+async fn the_agent_list_and_the_transcript_show_the_check_phase_of_each_implementer() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(
+        &data_dir,
+        &github,
+        "max_checks = 1",
+        START_TWO,
+        &format!("[[prompts]]\n{COMMIT}"),
+    )
+    .await;
+    let started = data_dir.path().join("started");
+    let release = data_dir.path().join("release");
+    github.set_check(
+        REPOSITORY,
+        &format!(
+            "echo x >> '{0}'\nwhile [ ! -e \"{1}$(wc -l < '{0}' | tr -d ' ')\" ]; do sleep 0.05; done",
+            started.display(),
+            release.display()
+        ),
+    );
+
+    dispatch_two(&github);
+
+    let phases = async || {
+        let mut phases: Vec<Option<String>> = sessions(&engine, "implementer")
+            .await
+            .into_iter()
+            .map(|session| session.phase)
+            .collect();
+        phases.sort();
+        phases
+    };
+    wait_for(async || {
+        (phases().await
+            == [
+                Some("runs .mobius/check".to_string()),
+                Some("waits for a check slot".to_string()),
+            ])
+        .then_some(())
+    })
+    .await;
+    let overview = agents::groups(&engine).await.unwrap();
+    assert_eq!(overview.groups[2].name, "Implementer");
+    assert_eq!(overview.groups[2].count, 2);
+    let running = sessions(&engine, "implementer")
+        .await
+        .into_iter()
+        .find(|session| session.phase.as_deref() == Some("runs .mobius/check"))
+        .unwrap();
+    let waiting = sessions(&engine, "implementer")
+        .await
+        .into_iter()
+        .find(|session| session.phase.as_deref() == Some("waits for a check slot"))
+        .unwrap();
+    assert_eq!(waiting.queue_reason, None);
+
+    fs::write(format!("{}1", release.display()), "").unwrap();
+
+    wait_for(async || {
+        let session = engine.store.sessions().get(waiting.id).await.unwrap();
+        (session.phase.as_deref() == Some("runs .mobius/check")).then_some(())
+    })
+    .await;
+    assert_eq!(
+        engine
+            .store
+            .sessions()
+            .get(running.id)
+            .await
+            .unwrap()
+            .phase
+            .as_deref(),
+        None
+    );
+
+    fs::write(format!("{}2", release.display()), "").unwrap();
+
+    let ended = ended_implementers(&engine, 2).await;
+    assert!(ended.iter().all(|session| session.phase.is_none()));
+    let check_rows = async |session: i64| -> Vec<String> {
+        transcript(&engine, session)
+            .await
+            .into_iter()
+            .filter(|row| row.kind == "check")
+            .map(|row| {
+                let json: Value = serde_json::from_str(&row.json).unwrap();
+                json["text"].as_str().unwrap().to_string()
+            })
+            .collect()
+    };
+    let first = check_rows(running.id).await;
+    assert_eq!(first.len(), 2);
+    assert_eq!(first[0], "runs .mobius/check");
+    assert!(
+        first[1].starts_with(".mobius/check passed in "),
+        "{first:?}"
+    );
+    let second = check_rows(waiting.id).await;
+    assert_eq!(second.len(), 3);
+    assert_eq!(second[0], "waits for a check slot");
+    assert_eq!(second[1], "runs .mobius/check");
+    assert!(
+        second[2].starts_with(".mobius/check passed in "),
+        "{second:?}"
     );
 }

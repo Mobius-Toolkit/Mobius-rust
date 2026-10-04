@@ -1108,6 +1108,9 @@ fn AgentRow(agent: ActiveAgent) -> Element {
                     if let Some(reason) = &session.queue_reason {
                         " · {reason}"
                     }
+                    if let Some(phase) = &session.phase {
+                        " · {phase}"
+                    }
                 }
                 if session.workstream != 0 {
                     div { class: "muted small ellip", "Workstream {numbered(session.workstream, &agent.workstream_title)}" }
@@ -2135,6 +2138,7 @@ fn AgentEntry(node: AgentNode, depth: usize, onclick: EventHandler<MouseEvent>) 
     let detail = session
         .queue_reason
         .clone()
+        .or_else(|| session.phase.clone())
         .unwrap_or_else(|| format!("{start}{end}"));
     rsx! {
         button { class: "node", style: "--depth: {depth}", onclick: move |event| onclick.call(event),

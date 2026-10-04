@@ -36,7 +36,18 @@ pub struct Config {
     pub poll_interval: Duration,
     #[serde(with = "humantime_serde", default = "default_housekeeper_interval")]
     pub housekeeper_interval: Duration,
+    // The wait before the first, second, and later Worker restarts. The file has no key for it.
+    #[serde(skip, default = "default_restart_waits")]
+    pub restart_waits: Vec<Duration>,
     pub roles: Roles,
+}
+
+impl Config {
+    // The wait before restart number `restarts` of a task, counted from 1. Each restart after the last listed wait uses the last wait.
+    pub fn restart_wait(&self, restarts: i64) -> Duration {
+        let index = usize::try_from(restarts - 1).unwrap_or_default();
+        self.restart_waits[index.min(self.restart_waits.len() - 1)]
+    }
 }
 
 #[derive(Debug)]
@@ -164,6 +175,13 @@ fn default_housekeeper_interval() -> Duration {
     Duration::from_secs(60 * 60)
 }
 
+fn default_restart_waits() -> Vec<Duration> {
+    [1, 5, 15]
+        .into_iter()
+        .map(|minutes| Duration::from_secs(minutes * 60))
+        .collect()
+}
+
 pub fn load(path: &Path) -> Result<Config, String> {
     let text = fs::read_to_string(path)
         .map_err(|error| format!("{}: cannot read: {error}", path.display()))?;
@@ -263,6 +281,24 @@ judge       = { harness = "claude-code", model = "haiku",   effort = "low" }
                 "{role}"
             );
         }
+    }
+
+    #[test]
+    fn the_restart_wait_grows_with_each_restart_up_to_the_last_wait() {
+        let config = parse(VALID).unwrap();
+
+        let waits: Vec<u64> = (1..=5)
+            .map(|restarts| config.restart_wait(restarts).as_secs() / 60)
+            .collect();
+
+        assert_eq!(waits, [1, 5, 15, 15, 15]);
+    }
+
+    #[test]
+    fn the_file_has_no_key_for_the_restart_waits() {
+        let error = parse(&format!("restart_waits = []\n{VALID}")).unwrap_err();
+
+        assert!(error.contains("restart_waits"), "{error}");
     }
 
     #[test]

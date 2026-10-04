@@ -194,7 +194,9 @@ pub(crate) async fn end(
     engine.store.tasks().end(task.id).await?;
     stop_workers(engine, &repository.full_name, task).await?;
     repository.remove_label(task.issue, WORKING_LABEL).await?;
-    repository.remove_label(task.issue, NEEDS_HUMAN_LABEL).await
+    Ok(repository
+        .remove_label(task.issue, NEEDS_HUMAN_LABEL)
+        .await?)
 }
 
 // The pull request and the branch stay.

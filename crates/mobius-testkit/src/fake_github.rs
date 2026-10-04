@@ -158,6 +158,8 @@ struct Records {
     failed_closes: HashSet<(String, i64)>,
     // The issues whose sub-issue list request fails, as (repository, number).
     failed_sub_issues: HashSet<(String, i64)>,
+    // The repositories whose pull request creation fails, with the status and the message.
+    failed_pull_requests: HashMap<String, (StatusCode, String)>,
     // The permissions of each App and of its installation by App id. An App without an entry has `DEFAULT_PERMISSIONS`.
     app_permissions: HashMap<i64, HashMap<String, String>>,
     installation_permissions: HashMap<i64, HashMap<String, String>>,
@@ -627,6 +629,13 @@ impl FakeGitHub {
             .unwrap()
             .failed_sub_issues
             .insert((repository.to_string(), number));
+    }
+
+    pub fn fail_pull_request_creation(&self, repository: &str, status: u16, message: &str) {
+        self.state.lock().unwrap().failed_pull_requests.insert(
+            repository.to_string(),
+            (StatusCode::from_u16(status).unwrap(), message.to_string()),
+        );
     }
 
     pub fn add_account(&self, login: &str, account_type: &'static str) {
@@ -1658,6 +1667,9 @@ async fn create_pull_request(
 ) -> Response {
     let repository = format!("{owner}/{repo}");
     let mut records = state.lock().unwrap();
+    if let Some((status, message)) = records.failed_pull_requests.get(&repository) {
+        return (*status, Json(json!({ "message": message }))).into_response();
+    }
     let number = records.insert_pull_request(&repository, new);
     let mut json = pull_request_json(&records, &repository, number);
     json["mergeable"] = Value::Null;

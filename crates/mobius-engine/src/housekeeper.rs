@@ -127,7 +127,7 @@ pub(crate) async fn wait_for_disk(
     Ok(())
 }
 
-// At `max_worker_restarts`, the task goes to a human, and the Lead gets a stop event.
+// Waits before it gives `true`, and the Worker holds no slot during the wait. At `max_worker_restarts`, the task goes to a human, and the Lead gets a stop event.
 pub(crate) async fn restart(
     engine: &Engine,
     repository: &str,
@@ -138,7 +138,8 @@ pub(crate) async fn restart(
     error: &str,
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let max = engine.config.max_worker_restarts;
-    if engine.store.tasks().add_worker_restart(task, max).await? {
+    if let Some(restarts) = engine.store.tasks().add_worker_restart(task, max).await? {
+        tokio::time::sleep(engine.config.restart_wait(restarts)).await;
         return Ok(true);
     }
     if !implementer::hand_to_human(engine, repository, task, number).await? {

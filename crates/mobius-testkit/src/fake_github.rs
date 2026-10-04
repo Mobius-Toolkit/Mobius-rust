@@ -158,6 +158,8 @@ struct Records {
     failed_closes: HashSet<(String, i64)>,
     // The issues whose sub-issue list request fails, as (repository, number).
     failed_sub_issues: HashSet<(String, i64)>,
+    // The Unix time at which the exhausted core rate limit resets. Without it, the limit has calls left.
+    rate_limit_reset: Option<i64>,
     // The repositories whose pull request creation fails, with the status and the message.
     failed_pull_requests: HashMap<String, (StatusCode, String)>,
     // The permissions of each App and of its installation by App id. An App without an entry has `DEFAULT_PERMISSIONS`.
@@ -517,6 +519,7 @@ impl FakeGitHub {
             .route("/app-manifests/{code}/conversions", post(convert_manifest))
             .route("/login/oauth/access_token", post(exchange_code))
             .route("/user", get(user))
+            .route("/rate_limit", get(rate_limit))
             .route("/app", get(app))
             .route("/app/installations", get(installations))
             .route(
@@ -629,6 +632,10 @@ impl FakeGitHub {
             .unwrap()
             .failed_sub_issues
             .insert((repository.to_string(), number));
+    }
+
+    pub fn exhaust_rate_limit(&self, reset: i64) {
+        self.state.lock().unwrap().rate_limit_reset = Some(reset);
     }
 
     pub fn fail_pull_request_creation(&self, repository: &str, status: u16, message: &str) {
@@ -1236,6 +1243,16 @@ fn not_found() -> Response {
         Json(json!({ "message": "Not Found" })),
     )
         .into_response()
+}
+
+async fn rate_limit(State(state): State<Shared>) -> Response {
+    let (remaining, reset) = match state.lock().unwrap().rate_limit_reset {
+        Some(reset) => (0, reset),
+        None => (5000, 0),
+    };
+    let rate =
+        json!({ "limit": 5000, "used": 5000 - remaining, "remaining": remaining, "reset": reset });
+    Json(json!({ "resources": { "core": rate, "search": rate }, "rate": rate })).into_response()
 }
 
 async fn latest_release(State(state): State<Shared>) -> Response {

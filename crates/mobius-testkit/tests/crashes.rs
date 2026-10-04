@@ -8,6 +8,7 @@ use mobius_testkit::fake_github::{APP_SLUG, FakeGitHub};
 use mobius_testkit::{install_fake_harness, start_with, wait_for};
 use serde_json::Value;
 use tempfile::TempDir;
+use time::OffsetDateTime;
 
 const REPOSITORY: &str = "owner/shop";
 const FAKE_AGENT: &str = env!("CARGO_BIN_EXE_fake-agent");
@@ -265,6 +266,26 @@ async fn a_worker_that_dies_starts_again_after_the_restart_wait() {
     assert_eq!(sessions(&engine, "implementer").await.len(), 1);
     wait_for(async || (!github.pull_requests(REPOSITORY).is_empty()).then_some(())).await;
     assert_eq!(sessions(&engine, "implementer").await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_worker_that_fails_in_a_rate_limit_starts_again_after_the_reset() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let implementer = format!("[[prompts]]\nshell = \"{COMMIT}\"\n");
+    let engine = connect(&data_dir, &github, &dispatch_start(), &implementer, "").await;
+    github.fail_pull_request_creation(REPOSITORY, 403, "API rate limit exceeded");
+    let reset = OffsetDateTime::now_utc().unix_timestamp() + 5;
+    github.exhaust_rate_limit(reset);
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    let implementers = wait_for(async || {
+        let implementers = sessions(&engine, "implementer").await;
+        (implementers.len() == 2).then_some(implementers)
+    })
+    .await;
+    assert!(implementers[1].started_at.unix_timestamp() >= reset);
 }
 
 #[tokio::test]

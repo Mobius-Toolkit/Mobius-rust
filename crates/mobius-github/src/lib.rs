@@ -106,6 +106,22 @@ struct InstallationAccount {
 }
 
 #[derive(Deserialize)]
+struct RateLimit {
+    resources: RateLimitResources,
+}
+
+#[derive(Deserialize)]
+struct RateLimitResources {
+    core: RateLimitCore,
+}
+
+#[derive(Deserialize)]
+struct RateLimitCore {
+    remaining: i64,
+    reset: i64,
+}
+
+#[derive(Deserialize)]
 struct AppPermissions {
     permissions: HashMap<String, String>,
 }
@@ -655,6 +671,13 @@ impl Repository {
                 })),
             )
             .await?)
+    }
+
+    // Gives the Unix time at which the core rate limit resets, or `None` when the limit has calls left. The octocrab errors have no response headers, so this reads the same value from `/rate_limit`, which GitHub does not count in the limit.
+    pub async fn rate_limit_reset(&self) -> Result<Option<i64>, Failure> {
+        let limit: RateLimit = self.client.get("/rate_limit", None::<&()>).await?;
+        let core = limit.resources.core;
+        Ok((core.remaining == 0).then_some(core.reset))
     }
 
     pub async fn pull_request(&self, number: i64) -> Result<PullRequest, Failure> {

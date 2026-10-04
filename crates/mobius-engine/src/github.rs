@@ -9,6 +9,8 @@ use crate::Engine;
 
 const REFRESH_MARGIN: Duration = Duration::minutes(5);
 
+const RELEASE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 // Each refresh stops the refresh token that it uses.
 static REFRESH: Mutex<()> = Mutex::const_new(());
 
@@ -141,10 +143,26 @@ pub(crate) async fn user_token(
     Ok(tokens.access_token)
 }
 
-pub async fn new_release(engine: &Engine) -> Option<String> {
+pub(crate) fn spawn_release_check(engine: Engine) {
+    tokio::spawn(async move {
+        loop {
+            let Ok(repository) = engine.any_repository() else {
+                tokio::time::sleep(engine.config.poll_interval).await;
+                continue;
+            };
+            match repository.latest_release().await {
+                Ok(release) => *engine.latest_release.lock().unwrap() = Some(release.tag_name),
+                Err(error) => eprintln!("mobius: release check: {error}"),
+            }
+            tokio::time::sleep(RELEASE_CHECK_INTERVAL).await;
+        }
+    });
+}
+
+pub fn new_release(engine: &Engine) -> Option<String> {
     let current = mobius_domain::RELEASE_VERSION?;
-    let release = engine.github.latest_release().await.ok()?;
-    mobius_domain::newer_release(current, &release.tag_name).then_some(release.tag_name)
+    let latest = engine.latest_release.lock().unwrap().clone()?;
+    mobius_domain::newer_release(current, &latest).then_some(latest)
 }
 
 pub async fn release_changes(
@@ -154,7 +172,10 @@ pub async fn release_changes(
     let Some(current) = mobius_domain::RELEASE_VERSION else {
         return Err("This Mobius build is not a release.".into());
     };
-    let messages = engine.github.commit_messages(current, new).await?;
+    let messages = engine
+        .any_repository()?
+        .commit_messages(current, new)
+        .await?;
     Ok(messages
         .iter()
         .rev()

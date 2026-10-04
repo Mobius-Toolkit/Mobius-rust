@@ -1,6 +1,6 @@
 use mobius_engine::github;
 use mobius_testkit::fake_github::{self, FakeGitHub};
-use mobius_testkit::start;
+use mobius_testkit::{start, wait_for};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
@@ -221,4 +221,29 @@ async fn user_callback_compares_the_login_without_letter_case() {
         .unwrap();
 
     assert!(github::authorize_user(&engine, "user-code").await.unwrap());
+}
+
+#[tokio::test]
+async fn many_release_reads_make_one_call_to_github() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    github.add_manifest_code("manifest-code");
+    github.add_repository("owner/shop");
+    github.set_release("v9.9.9", &[]);
+    let engine = start(data_dir.path(), "correct horse", &github.url).await;
+    github::convert_manifest(&engine, "manifest-code")
+        .await
+        .unwrap();
+    wait_for(async || (github.latest_release_calls() == 1).then_some(())).await;
+
+    for _ in 0..20 {
+        github::new_release(&engine);
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    assert_eq!(github.latest_release_calls(), 1);
+    assert_eq!(
+        github.unauthenticated_requests(),
+        ["POST /app-manifests/manifest-code/conversions"]
+    );
 }

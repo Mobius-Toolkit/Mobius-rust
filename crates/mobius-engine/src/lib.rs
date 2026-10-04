@@ -89,6 +89,8 @@ pub struct Engine {
     pausing: Arc<tokio::sync::Mutex<()>>,
     // Each end of a pause of a Harness wakes the sessions that wait for it.
     pauses_changed: Arc<tokio::sync::Notify>,
+    // The tag of the latest release at the last release check.
+    latest_release: Arc<Mutex<Option<String>>>,
     // The drain for an upgrade.
     drain: Arc<drain::Drain>,
     // Set while an upgrade runs.
@@ -112,6 +114,16 @@ impl Engine {
             .find(|repository| repository.full_name == name)
             .cloned()
             .ok_or_else(|| format!("The Mobius App has no access to {name}."))
+    }
+
+    // Any repository gives a token that reads the public repository of Mobius.
+    fn any_repository(&self) -> Result<Repository, String> {
+        self.repositories
+            .read()
+            .unwrap()
+            .first()
+            .cloned()
+            .ok_or_else(|| "The Mobius App has no access to a repository.".to_string())
     }
 
     fn broadcast(&self, live: Live) {
@@ -153,6 +165,7 @@ pub async fn start(
         recovered: Arc::default(),
         pausing: Arc::default(),
         pauses_changed: Arc::default(),
+        latest_release: Arc::default(),
         drain: Arc::default(),
         upgrading: Arc::default(),
         upgrade_error: Arc::default(),
@@ -165,6 +178,7 @@ pub async fn start(
     recovery::start(&engine).await?;
     poll::spawn(engine.clone());
     housekeeper::spawn(engine.clone());
+    github::spawn_release_check(engine.clone());
     Ok(engine)
 }
 

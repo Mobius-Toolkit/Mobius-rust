@@ -57,7 +57,7 @@ async fn upgrade(engine: &Engine) -> Result<DrainEnd, Failure> {
     let Some(current) = mobius_domain::RELEASE_VERSION else {
         return Err("This Mobius build is not a release.".into());
     };
-    let release = engine.github.latest_release().await?;
+    let release = engine.any_repository()?.latest_release().await?;
     if !mobius_domain::newer_release(current, &release.tag_name) {
         return Err(format!("{} is the newest release.", release.tag_name).into());
     }

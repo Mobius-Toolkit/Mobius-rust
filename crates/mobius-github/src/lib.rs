@@ -470,12 +470,6 @@ impl GitHub {
         })
     }
 
-    pub async fn user_id(&self, login: &str) -> Result<i64, Box<dyn Error + Send + Sync>> {
-        let login = login.replace('[', "%5B").replace(']', "%5D");
-        let found: Account = self.api.get(format!("/users/{login}"), None::<&()>).await?;
-        Ok(found.id)
-    }
-
     pub async fn convert_manifest(
         &self,
         code: &str,
@@ -548,34 +542,6 @@ impl GitHub {
         Ok(user.login)
     }
 
-    // The repository is public, so the call needs no token.
-    pub async fn latest_release(&self) -> Result<Release, Box<dyn Error + Send + Sync>> {
-        Ok(self
-            .api
-            .get("/repos/Mobius-Toolkit/Mobius/releases/latest", None::<&()>)
-            .await?)
-    }
-
-    // The messages of the commits after `current` up to `new`, the oldest first. The response holds at most 250 commits.
-    pub async fn commit_messages(
-        &self,
-        current: &str,
-        new: &str,
-    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
-        let comparison: Comparison = self
-            .api
-            .get(
-                format!("/repos/Mobius-Toolkit/Mobius/compare/{current}...{new}"),
-                None::<&()>,
-            )
-            .await?;
-        Ok(comparison
-            .commits
-            .into_iter()
-            .map(|compared| compared.commit.message)
-            .collect())
-    }
-
     pub fn release_url(&self, tag: &str, asset: &str) -> String {
         format!(
             "{}/Mobius-Toolkit/Mobius/releases/download/{tag}/{asset}",
@@ -599,6 +565,43 @@ impl Repository {
             client: self.client.user_access_token(user_token.to_string())?,
             ..self.clone()
         })
+    }
+
+    pub async fn user_id(&self, login: &str) -> Result<i64, Box<dyn Error + Send + Sync>> {
+        let login = login.replace('[', "%5B").replace(']', "%5D");
+        let found: Account = self
+            .client
+            .get(format!("/users/{login}"), None::<&()>)
+            .await?;
+        Ok(found.id)
+    }
+
+    // The repository `Mobius-Toolkit/Mobius` is public, so the token of any repository can read it.
+    pub async fn latest_release(&self) -> Result<Release, Box<dyn Error + Send + Sync>> {
+        Ok(self
+            .client
+            .get("/repos/Mobius-Toolkit/Mobius/releases/latest", None::<&()>)
+            .await?)
+    }
+
+    // The messages of the commits after `current` up to `new`, the oldest first. The response holds at most 250 commits.
+    pub async fn commit_messages(
+        &self,
+        current: &str,
+        new: &str,
+    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+        let comparison: Comparison = self
+            .client
+            .get(
+                format!("/repos/Mobius-Toolkit/Mobius/compare/{current}...{new}"),
+                None::<&()>,
+            )
+            .await?;
+        Ok(comparison
+            .commits
+            .into_iter()
+            .map(|compared| compared.commit.message)
+            .collect())
     }
 
     pub async fn create_draft_pull_request(

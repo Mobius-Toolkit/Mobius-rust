@@ -8,8 +8,6 @@ use serde_json::json;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use crate::public_path;
-
 const REPOSITORY: &str = "owner/shop";
 
 async fn connect(data_dir: &TempDir, github: &FakeGitHub) -> Engine {
@@ -32,7 +30,6 @@ async fn post(
     path: &str,
     body: serde_json::Value,
 ) -> (StatusCode, String) {
-    public_path::set();
     let router = dioxus::server::router(mobius_ui::App)
         .layer(Extension(engine.clone()))
         .layer(Extension(engine.store.clone()));

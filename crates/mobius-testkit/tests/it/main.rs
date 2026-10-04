@@ -23,7 +23,6 @@ mod mcp;
 mod organizations;
 mod plans;
 mod priority;
-mod public_path;
 mod pwa;
 mod queue;
 mod repository_files;

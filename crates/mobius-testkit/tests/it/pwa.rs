@@ -9,10 +9,7 @@ use mobius_testkit::start;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use crate::public_path;
-
 async fn app() -> (Router, TempDir, FakeGitHub, Engine) {
-    public_path::set();
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;
     let engine = start(data_dir.path(), "correct horse", &github.url).await;

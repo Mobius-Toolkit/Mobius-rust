@@ -67,6 +67,7 @@ pub(crate) struct Fix {
     pub(crate) replies: UnboundedSender<Reply>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Reply {
     pub(crate) target: Target,
     pub(crate) text: String,

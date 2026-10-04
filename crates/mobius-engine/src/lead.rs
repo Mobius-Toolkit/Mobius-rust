@@ -282,6 +282,15 @@ impl Recorder {
         Ok(())
     }
 
+    pub(crate) async fn note(&mut self, text: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.engine
+            .store
+            .transcript()
+            .add(self.session, "note", &json!({ "text": text }).to_string())
+            .await?;
+        Ok(())
+    }
+
     pub(crate) async fn update(
         &mut self,
         mut update: Value,

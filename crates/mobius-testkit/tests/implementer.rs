@@ -332,6 +332,114 @@ async fn a_commit_on_the_branch_during_a_round_merges_before_the_push() {
 }
 
 #[tokio::test]
+async fn a_step_after_the_check_that_fails_once_runs_again_with_no_new_agent_turn() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(
+        &data_dir,
+        &github,
+        "",
+        &format!("[[prompts]]\nwhen = \"dispatch of #41\"\n{START}"),
+        &format!("[[prompts]]\n{COMMIT}"),
+    )
+    .await;
+    github.fail_next_pull_request(REPOSITORY);
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    let implementers = ended_implementers(&engine, 2).await;
+    assert_eq!(implementers[0].end_reason.as_deref(), Some("failed"));
+    assert_eq!(implementers[1].end_reason.as_deref(), Some("done"));
+    let first = transcript(&engine, implementers[0].id).await;
+    assert_eq!(prompts(&first).len(), 1);
+    let second = transcript(&engine, implementers[1].id).await;
+    assert!(prompts(&second).is_empty());
+    assert!(second.iter().any(|row| row.kind == "note"));
+    let pull_requests = github.pull_requests(REPOSITORY);
+    assert_eq!(pull_requests.len(), 1);
+    let log = git(
+        &github.remote(REPOSITORY),
+        &["log", "--format=%s", "mobius/41"],
+    );
+    assert!(log.contains("Add plan model"), "{log}");
+    let check_runs = github.check_runs(REPOSITORY);
+    assert_eq!(check_runs.len(), 1);
+}
+
+#[tokio::test]
+async fn a_fetch_after_the_check_that_fails_runs_again_with_no_new_agent_turn() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(
+        &data_dir,
+        &github,
+        "max_worker_restarts = 1000",
+        &format!("[[prompts]]\nwhen = \"dispatch of #41\"\n{START}"),
+        &format!("[[prompts]]\n{COMMIT}"),
+    )
+    .await;
+    let remote = github.remote(REPOSITORY);
+    let away = remote.with_extension("away");
+    github.set_check(
+        REPOSITORY,
+        &format!("mv '{}' '{}'", remote.display(), away.display()),
+    );
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    ended_implementers(&engine, 1).await;
+    fs::rename(&away, &remote).unwrap();
+
+    wait_for(async || (!github.pull_requests(REPOSITORY).is_empty()).then_some(())).await;
+    let implementers = sessions(&engine, "implementer").await;
+    assert!(implementers.len() >= 2);
+    let mut agent_prompts = 0;
+    for implementer in &implementers {
+        agent_prompts += prompts(&transcript(&engine, implementer.id).await).len();
+    }
+    assert_eq!(agent_prompts, 1);
+    let log = git(&remote, &["log", "--format=%s", "mobius/41"]);
+    assert!(log.contains("Add plan model"), "{log}");
+}
+
+#[tokio::test]
+async fn a_commit_on_the_branch_during_the_check_runs_the_check_again_before_the_push() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(
+        &data_dir,
+        &github,
+        "",
+        &format!("[[prompts]]\nwhen = \"dispatch of #41\"\n{START}"),
+        &format!("[[prompts]]\n{COMMIT}"),
+    )
+    .await;
+    let go = data_dir.path().join("go");
+    let runs = data_dir.path().join("runs");
+    github.set_check(
+        REPOSITORY,
+        &format!(
+            "echo run >> '{}'; while [ ! -e '{}' ]; do sleep 0.05; done",
+            runs.display(),
+            go.display()
+        ),
+    );
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    wait_for(async || runs.exists().then_some(())).await;
+
+    github.push_commit(REPOSITORY, "mobius/41", "Update the UI screenshots");
+    fs::write(&go, "").unwrap();
+
+    wait_for(async || (!github.check_runs(REPOSITORY).is_empty()).then_some(())).await;
+    assert_eq!(fs::read_to_string(&runs).unwrap().lines().count(), 2);
+    let remote = github.remote(REPOSITORY);
+    let log = git(&remote, &["log", "--format=%s", "mobius/41"]);
+    assert!(log.contains("Add plan model"), "{log}");
+    assert!(log.contains("Update the UI screenshots"), "{log}");
+    assert_eq!(sessions(&engine, "implementer").await.len(), 1);
+}
+
+#[tokio::test]
 async fn a_push_that_github_rejects_stops_the_task_with_no_restart() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;

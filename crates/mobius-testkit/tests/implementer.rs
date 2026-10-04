@@ -367,6 +367,42 @@ async fn a_step_after_the_check_that_fails_once_runs_again_with_no_new_agent_tur
 }
 
 #[tokio::test]
+async fn a_fetch_after_the_check_that_fails_runs_again_with_no_new_agent_turn() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(
+        &data_dir,
+        &github,
+        "max_worker_restarts = 1000",
+        &format!("[[prompts]]\nwhen = \"dispatch of #41\"\n{START}"),
+        &format!("[[prompts]]\n{COMMIT}"),
+    )
+    .await;
+    let remote = github.remote(REPOSITORY);
+    let away = remote.with_extension("away");
+    github.set_check(
+        REPOSITORY,
+        &format!("mv '{}' '{}'", remote.display(), away.display()),
+    );
+
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    ended_implementers(&engine, 1).await;
+    fs::rename(&away, &remote).unwrap();
+
+    wait_for(async || (!github.pull_requests(REPOSITORY).is_empty()).then_some(())).await;
+    let implementers = sessions(&engine, "implementer").await;
+    assert!(implementers.len() >= 2);
+    let mut agent_prompts = 0;
+    for implementer in &implementers {
+        agent_prompts += prompts(&transcript(&engine, implementer.id).await).len();
+    }
+    assert_eq!(agent_prompts, 1);
+    let log = git(&remote, &["log", "--format=%s", "mobius/41"]);
+    assert!(log.contains("Add plan model"), "{log}");
+}
+
+#[tokio::test]
 async fn a_commit_on_the_branch_during_the_check_runs_the_check_again_before_the_push() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;

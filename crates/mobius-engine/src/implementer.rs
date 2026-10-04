@@ -51,6 +51,8 @@ struct Job {
 struct Checked {
     branch: String,
     base_commit: String,
+    // The commit that the last passed `.mobius/check` ran on.
+    checked_head: String,
     // `None` when the check passed.
     log: Option<String>,
     // The replies that GitHub did not accept yet.
@@ -697,9 +699,11 @@ async fn implement(
     while let Ok(reply) = held.try_recv() {
         replies.push_back(reply);
     }
+    let checked_head = mobius_runner::rev_parse(data_dir, &worktree, "HEAD").await?;
     Ok(Implemented::Checked(Checked {
         branch,
         base_commit,
+        checked_head,
         log,
         replies,
         pull_request: job.pull_request.clone(),
@@ -718,27 +722,19 @@ async fn finish(
     let worktree = mobius_runner::task_dir(data_dir, name, job.number);
     let merged = !job.conflict_round
         || mobius_runner::head_contains(data_dir, &worktree, &checked.base_commit).await?;
-    let pulled = {
+    {
         let repository = engine.repository(name)?;
         let _git = engine.git.lock().await;
         mobius_runner::fetch(data_dir, name, &repository.clone_url, repository.token()).await?;
-        let before = mobius_runner::rev_parse(data_dir, &worktree, "HEAD").await?;
         mobius_runner::pull(data_dir, &worktree, &checked.branch).await?;
-        before != mobius_runner::rev_parse(data_dir, &worktree, "HEAD").await?
-    };
-    if pulled && checked.log.is_none() {
-        let check = {
-            let _check = engine.checks.acquire().await?;
-            mobius_runner::check(
-                data_dir,
-                &worktree,
-                &engine.harness_path,
-                engine.config.check_timeout,
-            )
-            .await?
-        };
-        if let Check::Failed(log) = check {
-            return Ok(Outcome::MergedCheckFailed(tail(&log)));
+    }
+    if checked.log.is_none() {
+        let head = mobius_runner::rev_parse(data_dir, &worktree, "HEAD").await?;
+        if head != checked.checked_head {
+            if let Check::Failed(log) = run_check(engine, job, &worktree).await? {
+                return Ok(Outcome::MergedCheckFailed(tail(&log)));
+            }
+            checked.checked_head = head;
         }
     }
     let repository = engine.repository(name)?;
@@ -816,6 +812,39 @@ async fn finish(
     Ok(Outcome::CheckFailed(log.clone()))
 }
 
+// Waits for disk space and runs the check again when the disk is full.
+async fn run_check(
+    engine: &Engine,
+    job: &Job,
+    worktree: &Path,
+) -> Result<Check, Box<dyn Error + Send + Sync>> {
+    loop {
+        let check = {
+            let _check = engine.checks.acquire().await?;
+            mobius_runner::check(
+                &engine.config.data_dir,
+                worktree,
+                &engine.harness_path,
+                engine.config.check_timeout,
+            )
+            .await?
+        };
+        match check {
+            Check::Failed(log) if log.contains(DISK_FULL) => {
+                housekeeper::wait_for_disk(
+                    engine,
+                    &job.repository,
+                    job.workstream,
+                    job.number,
+                    &job.title,
+                )
+                .await?
+            }
+            check => return Ok(check),
+        }
+    }
+}
+
 // Gives `None` when the local check passes.
 async fn turns_and_checks(
     engine: &Engine,
@@ -832,31 +861,7 @@ async fn turns_and_checks(
         if let Some(reason) = turn(session, &prompt, updates, recorder, reasons).await? {
             return Ok(Some(Outcome::CannotDo(reason)));
         }
-        let check = loop {
-            let check = {
-                let _check = engine.checks.acquire().await?;
-                mobius_runner::check(
-                    &engine.config.data_dir,
-                    worktree,
-                    &engine.harness_path,
-                    engine.config.check_timeout,
-                )
-                .await?
-            };
-            match check {
-                Check::Failed(log) if log.contains(DISK_FULL) => {
-                    housekeeper::wait_for_disk(
-                        engine,
-                        &job.repository,
-                        job.workstream,
-                        job.number,
-                        &job.title,
-                    )
-                    .await?
-                }
-                check => break check,
-            }
-        };
+        let check = run_check(engine, job, worktree).await?;
         let Check::Failed(log) = check else {
             return Ok(None);
         };

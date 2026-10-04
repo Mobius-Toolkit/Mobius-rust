@@ -1,7 +1,8 @@
 use std::error::Error;
 
 use mobius_domain::{Author, ChatMessage, Unread};
-use sqlx::sqlite::SqlitePool;
+use sqlx::Executor;
+use sqlx::sqlite::{Sqlite, SqlitePool};
 use time::OffsetDateTime;
 
 pub struct ChatMessages<'a> {
@@ -36,6 +37,33 @@ impl Row {
     }
 }
 
+pub(crate) async fn insert<'a>(
+    executor: impl Executor<'a, Database = Sqlite>,
+    organization: &str,
+    repository: &str,
+    workstream: i64,
+    author: Author,
+    text: &str,
+) -> Result<ChatMessage, Box<dyn Error + Send + Sync>> {
+    let author = author.name();
+    let time = OffsetDateTime::now_utc();
+    let row = sqlx::query_as!(
+        Row,
+        r#"INSERT INTO chat_messages (organization, repository, workstream, author, time, text)
+               VALUES (?, ?, ?, ?, ?, ?)
+               RETURNING id, organization, repository, workstream, author, time AS "time: OffsetDateTime", text"#,
+        organization,
+        repository,
+        workstream,
+        author,
+        time,
+        text
+    )
+    .fetch_one(executor)
+    .await?;
+    row.message()
+}
+
 impl ChatMessages<'_> {
     pub async fn add(
         &self,
@@ -45,23 +73,15 @@ impl ChatMessages<'_> {
         author: Author,
         text: &str,
     ) -> Result<ChatMessage, Box<dyn Error + Send + Sync>> {
-        let author = author.name();
-        let time = OffsetDateTime::now_utc();
-        let row = sqlx::query_as!(
-            Row,
-            r#"INSERT INTO chat_messages (organization, repository, workstream, author, time, text)
-               VALUES (?, ?, ?, ?, ?, ?)
-               RETURNING id, organization, repository, workstream, author, time AS "time: OffsetDateTime", text"#,
+        insert(
+            self.pool,
             organization,
             repository,
             workstream,
             author,
-            time,
-            text
+            text,
         )
-        .fetch_one(self.pool)
-        .await?;
-        row.message()
+        .await
     }
 
     pub async fn append(

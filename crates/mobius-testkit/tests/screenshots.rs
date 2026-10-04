@@ -1388,6 +1388,7 @@ async fn the_upgrade_modal_lists_the_release_changes() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;
     github.add_manifest_code("manifest-code");
+    github.add_repository(REPOSITORY);
     github.set_release(
         "v0.1.4",
         &[
@@ -1403,6 +1404,7 @@ async fn the_upgrade_modal_lists_the_release_changes() {
     github::convert_manifest(&engine, "manifest-code")
         .await
         .unwrap();
+    wait_for(async || github::new_release(&engine).map(|_| ())).await;
     let (mut browser, mut handler) = Browser::launch(
         BrowserConfig::builder()
             .launch_timeout(Duration::from_secs(60))

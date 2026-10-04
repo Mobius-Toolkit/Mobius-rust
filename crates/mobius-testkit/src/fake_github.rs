@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
@@ -194,6 +195,9 @@ struct Records {
     latest_release: Option<String>,
     // The commit messages of each comparison, the oldest first.
     compared_commit_messages: Vec<String>,
+    latest_release_calls: usize,
+    // The method and the path of each request with no `Authorization` header.
+    unauthenticated: Vec<String>,
     clock: i64,
     not_modified: u32,
 }
@@ -602,6 +606,10 @@ impl FakeGitHub {
                 "/repos/{owner}/{repo}/pulls/{number}/comments/{id}/replies",
                 post(reply_to_review_comment),
             )
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                record_unauthenticated,
+            ))
             .with_state(state.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -800,6 +808,15 @@ impl FakeGitHub {
         records.latest_release = Some(tag.to_string());
         records.compared_commit_messages =
             messages.iter().map(|message| message.to_string()).collect();
+    }
+
+    pub fn latest_release_calls(&self) -> usize {
+        self.state.lock().unwrap().latest_release_calls
+    }
+
+    // The method and the path of each request with no `Authorization` header, in request order.
+    pub fn unauthenticated_requests(&self) -> Vec<String> {
+        self.state.lock().unwrap().unauthenticated.clone()
     }
 
     // The pull request gives `mergeable_state` `behind` while its base is not an ancestor of its head.
@@ -1229,8 +1246,25 @@ fn not_found() -> Response {
         .into_response()
 }
 
+async fn record_unauthenticated(
+    State(state): State<Shared>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !request.headers().contains_key(header::AUTHORIZATION) {
+        state.lock().unwrap().unauthenticated.push(format!(
+            "{} {}",
+            request.method(),
+            request.uri().path()
+        ));
+    }
+    next.run(request).await
+}
+
 async fn latest_release(State(state): State<Shared>) -> Response {
-    match &state.lock().unwrap().latest_release {
+    let mut records = state.lock().unwrap();
+    records.latest_release_calls += 1;
+    match &records.latest_release {
         Some(tag) => Json(json!({ "tag_name": tag, "assets": [] })).into_response(),
         None => not_found(),
     }

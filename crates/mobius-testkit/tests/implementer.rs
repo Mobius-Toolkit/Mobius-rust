@@ -249,6 +249,35 @@ async fn the_implementer_commits_and_mobius_opens_a_draft_pull_request() {
 }
 
 #[tokio::test]
+async fn the_start_of_an_implementer_makes_no_github_call_with_no_token() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect(
+        &data_dir,
+        &github,
+        "",
+        &format!("[[prompts]]\nwhen = \"dispatch of #41\"\n{START}"),
+        &format!("[[prompts]]\n{COMMIT}"),
+    )
+    .await;
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    ended_implementers(&engine, 1).await;
+
+    assert_eq!(
+        git(
+            &github.remote(REPOSITORY),
+            &["log", "-1", "--format=%ae", "mobius/41"]
+        ),
+        format!("{BOT_USER_ID}+mobius-test[bot]@users.noreply.github.com")
+    );
+    assert_eq!(
+        github.unauthenticated_requests(),
+        ["POST /app-manifests/manifest-code/conversions"]
+    );
+}
+
+#[tokio::test]
 async fn cannot_do_goes_to_the_lead_and_the_next_start_merges_a_branch_that_diverged() {
     let data_dir = TempDir::new().unwrap();
     let github = FakeGitHub::start().await;

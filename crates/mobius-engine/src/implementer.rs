@@ -591,7 +591,7 @@ async fn implement(
         None => {
             let repository = engine.repository(name)?;
             let login = app_login(&repository.app_slug);
-            let id = engine.github.user_id(&login).await?;
+            let id = repository.user_id(&login).await?;
             let _git = engine.git.lock().await;
             mobius_runner::fetch(data_dir, name, &repository.clone_url, repository.token()).await?;
             let branch = mobius_runner::add_worktree(

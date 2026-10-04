@@ -145,7 +145,7 @@ pub async fn github_user_callback() -> ServerFnResult<Redirect> {
 
 #[get("/api/release", _device: DeviceId, engine: Extension<Engine>)]
 pub async fn release() -> ServerFnResult<Option<String>> {
-    Ok(github::new_release(&engine).await)
+    Ok(github::new_release(&engine))
 }
 
 #[post("/api/release/changes", _device: DeviceId, engine: Extension<Engine>)]

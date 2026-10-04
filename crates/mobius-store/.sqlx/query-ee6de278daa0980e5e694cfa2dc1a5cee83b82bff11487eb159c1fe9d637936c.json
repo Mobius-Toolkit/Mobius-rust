@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT number AS \"workstream!: i64\" FROM copied_workstreams\n               WHERE repository = ?1 AND number = ?2\n               UNION\n               SELECT workstream AS \"workstream!: i64\" FROM copied_issues\n               WHERE repository = ?1 AND number = ?2\n                 AND substr(repository_url, -length(?1) - 7) = '/repos/' || ?1 COLLATE NOCASE",
+  "describe": {
+    "columns": [
+      {
+        "name": "workstream!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "copied_workstreams",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ee6de278daa0980e5e694cfa2dc1a5cee83b82bff11487eb159c1fe9d637936c"
+}

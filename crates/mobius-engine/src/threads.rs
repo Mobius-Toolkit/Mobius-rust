@@ -3,6 +3,7 @@ use std::error::Error;
 use mobius_github::Repository;
 
 // A review thread, named by the id of its first comment, or a conversation comment of the pull request.
+#[derive(Clone)]
 pub(crate) enum Target {
     Thread { comment: i64, node: String },
     Comment { body: String },

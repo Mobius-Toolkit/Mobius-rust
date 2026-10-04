@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::error::Error;
 use std::path::Path;
 use std::pin::Pin;
@@ -41,6 +42,26 @@ struct Job {
     prompt: String,
     // The session of the agent that started the work, or of the newest session of the issue when Mobius started it.
     parent: Option<i64>,
+    // Set while the work is committed and checked, but a later step failed.
+    checked: Option<Checked>,
+}
+
+// The state after the last `.mobius/check`. The next round runs only the steps after the check.
+#[derive(Clone)]
+struct Checked {
+    branch: String,
+    base_commit: String,
+    // `None` when the check passed.
+    log: Option<String>,
+    // The replies that GitHub did not accept yet.
+    replies: VecDeque<mcp::Reply>,
+    pull_request: Option<PullRequest>,
+}
+
+// The result of the turns and the checks.
+enum Implemented {
+    Checked(Checked),
+    Ended(Outcome),
 }
 
 enum Outcome {
@@ -49,6 +70,8 @@ enum Outcome {
     CheckFailed(String),
     NotMerged,
     PushRejected(String),
+    // The merge of the branch on `origin` brought commits, and the check failed on them.
+    MergedCheckFailed(String),
     Stopped,
 }
 
@@ -98,6 +121,7 @@ pub(crate) async fn start(
             "{ROLE_PROMPT}\n{sections}# Brief\n\n{brief}\n\n# Issue\n\n{issue}\n# Lead instructions\n\n{instructions}"
         ),
         parent,
+        checked: None,
     };
     engine
         .store
@@ -167,6 +191,7 @@ pub(crate) async fn fix_round(
             round.items
         ),
         parent: round.parent,
+        checked: None,
     };
     tasks.set_worker(job.task, ROLE, Some(&job.prompt)).await?;
     tokio::spawn(run(engine.clone(), job));
@@ -211,6 +236,7 @@ pub(crate) async fn restart(
             ROLE,
         )
         .await?,
+        checked: None,
     };
     tokio::spawn(run(engine.clone(), job));
     Ok(())
@@ -256,6 +282,7 @@ pub(crate) async fn conflict_round(
         conflict_round: true,
         prompt,
         parent,
+        checked: None,
     };
     engine
         .store
@@ -267,9 +294,9 @@ pub(crate) async fn conflict_round(
 }
 
 // The future has a named type, because it and the future of `reviewer::run` start each other.
-fn run(engine: Engine, job: Job) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+fn run(engine: Engine, mut job: Job) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     Box::pin(async move {
-        let Err(error) = session(&engine, &job).await else {
+        let Err(error) = session(&engine, &mut job).await else {
             return;
         };
         eprintln!(
@@ -368,7 +395,7 @@ pub(crate) async fn hand_to_human(
     Ok(true)
 }
 
-async fn session(engine: &Engine, job: &Job) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn session(engine: &Engine, job: &mut Job) -> Result<(), Box<dyn Error + Send + Sync>> {
     // The subscription comes before the first state change, so the session gets each stop of the task.
     let mut stops = engine.stops.subscribe();
     let session = lead::add_session(
@@ -432,19 +459,42 @@ async fn session(engine: &Engine, job: &Job) -> Result<(), Box<dyn Error + Send 
             turn: None,
         },
     )?;
+    let mut checked = job.checked.take();
     let result = tokio::select! {
-        result = implement(
-            engine,
-            job,
-            session,
-            &key,
-            &mut recorder,
-            &mut reasons,
-            &mut held,
-        ) => result,
+        result = async {
+            match &mut checked {
+                Some(checked) => {
+                    recorder
+                        .note("Mobius tries the steps after the check again.")
+                        .await?;
+                    finish(engine, job, session, checked).await
+                }
+                None => {
+                    let outcome = implement(
+                        engine,
+                        job,
+                        session,
+                        &key,
+                        &mut recorder,
+                        &mut reasons,
+                        &mut held,
+                    )
+                    .await?;
+                    match outcome {
+                        Implemented::Checked(state) => {
+                            finish(engine, job, session, checked.insert(state)).await
+                        }
+                        Implemented::Ended(outcome) => Ok(outcome),
+                    }
+                }
+            }
+        } => result,
         () = ends::stopped(&mut stops, job.task) => Ok(Outcome::Stopped),
     };
     mcp::close(engine, &key);
+    if result.is_err() {
+        job.checked = checked;
+    }
     match result {
         Ok(Outcome::Stopped) => lead::end_session(engine, session, "stopped").await,
         Ok(Outcome::Done(pushed)) => {
@@ -538,6 +588,13 @@ async fn session(engine: &Engine, job: &Job) -> Result<(), Box<dyn Error + Send 
             )
             .await
         }
+        Ok(Outcome::MergedCheckFailed(log)) => {
+            let error = format!(
+                ".mobius/check failed after the merge of the new commits of the branch. The output ends with these lines:\n\n```\n{log}\n```"
+            );
+            recorder.fail(&error).await?;
+            Err(error.into())
+        }
         Ok(Outcome::CannotDo(reason)) => {
             lead::end_session(engine, session, "cannot_do").await?;
             // A task that the Lead declined during the turn gets no event.
@@ -575,7 +632,7 @@ async fn implement(
     recorder: &mut Recorder,
     reasons: &mut UnboundedReceiver<String>,
     held: &mut UnboundedReceiver<mcp::Reply>,
-) -> Result<Outcome, Box<dyn Error + Send + Sync>> {
+) -> Result<Implemented, Box<dyn Error + Send + Sync>> {
     let data_dir = &engine.config.data_dir;
     let name = &job.repository;
     let worktree = mobius_runner::task_dir(data_dir, name, job.number);
@@ -633,16 +690,62 @@ async fn implement(
     session.close().await;
     let log = match outcome? {
         Some(Outcome::CheckFailed(log)) => Some(log),
-        Some(outcome) => return Ok(outcome),
+        Some(outcome) => return Ok(Implemented::Ended(outcome)),
         None => None,
     };
+    let mut replies = VecDeque::new();
+    while let Ok(reply) = held.try_recv() {
+        replies.push_back(reply);
+    }
+    Ok(Implemented::Checked(Checked {
+        branch,
+        base_commit,
+        log,
+        replies,
+        pull_request: job.pull_request.clone(),
+    }))
+}
+
+// Each try takes the repository again, so it uses the token of the last poll.
+async fn finish(
+    engine: &Engine,
+    job: &Job,
+    session_id: i64,
+    checked: &mut Checked,
+) -> Result<Outcome, Box<dyn Error + Send + Sync>> {
+    let data_dir = &engine.config.data_dir;
+    let name = &job.repository;
+    let worktree = mobius_runner::task_dir(data_dir, name, job.number);
     let merged = !job.conflict_round
-        || mobius_runner::head_contains(data_dir, &worktree, &base_commit).await?;
-    let sha = {
+        || mobius_runner::head_contains(data_dir, &worktree, &checked.base_commit).await?;
+    let pulled = {
+        let repository = engine.repository(name)?;
         let _git = engine.git.lock().await;
         mobius_runner::fetch(data_dir, name, &repository.clone_url, repository.token()).await?;
-        mobius_runner::pull(data_dir, &worktree, &branch).await?;
-        match mobius_runner::push(data_dir, &worktree, repository.token(), &branch).await {
+        let before = mobius_runner::rev_parse(data_dir, &worktree, "HEAD").await?;
+        mobius_runner::pull(data_dir, &worktree, &checked.branch).await?;
+        before != mobius_runner::rev_parse(data_dir, &worktree, "HEAD").await?
+    };
+    if pulled && checked.log.is_none() {
+        let check = {
+            let _check = engine.checks.acquire().await?;
+            mobius_runner::check(
+                data_dir,
+                &worktree,
+                &engine.harness_path,
+                engine.config.check_timeout,
+            )
+            .await?
+        };
+        if let Check::Failed(log) = check {
+            return Ok(Outcome::MergedCheckFailed(tail(&log)));
+        }
+    }
+    let repository = engine.repository(name)?;
+    let base = format!("origin/{}", repository.default_branch);
+    let sha = {
+        let _git = engine.git.lock().await;
+        match mobius_runner::push(data_dir, &worktree, repository.token(), &checked.branch).await {
             Ok(sha) => sha,
             Err(error) if error.contains("[remote rejected]") => {
                 return Ok(Outcome::PushRejected(error));
@@ -650,51 +753,58 @@ async fn implement(
             Err(error) => return Err(error.into()),
         }
     };
-    let pull_request = match &job.pull_request {
+    let pull_request = match &checked.pull_request {
         Some(pull_request) => pull_request.clone(),
         None => {
             let pull_request = repository
                 .create_draft_pull_request(
                     &job.title,
-                    &branch,
+                    &checked.branch,
                     &repository.default_branch,
                     &format!("Closes #{}", job.number),
                 )
                 .await?;
-            engine
-                .store
-                .tasks()
-                .set_pull_request(job.task, pull_request.number)
-                .await?;
-            let open = engine.store.sessions().get(session_id).await?;
-            engine.broadcast(Live::Agent(agents::node(open)));
+            checked.pull_request = Some(pull_request.clone());
             pull_request
         }
     };
-    while let Ok(reply) = held.try_recv() {
+    if job.pull_request.is_none() {
+        engine
+            .store
+            .tasks()
+            .set_pull_request(job.task, pull_request.number)
+            .await?;
+        let open = engine.store.sessions().get(session_id).await?;
+        engine.broadcast(Live::Agent(agents::node(open)));
+    }
+    while let Some(reply) = checked.replies.front() {
         threads::reply(&repository, pull_request.number, &reply.target, &reply.text).await?;
+        checked.replies.pop_front();
     }
-    if log.is_none() && !merged {
-        repository
-            .create_failed_check_run(
-                CHECK_RUN,
-                &sha,
-                "Conflict round failed",
-                &format!("The Implementer did not merge `{base}`."),
-            )
-            .await?;
-        return Ok(Outcome::NotMerged);
-    }
-    let Some(log) = log else {
-        let check_run = repository
-            .create_check_run(CHECK_RUN, &sha, "in_progress")
-            .await?;
-        return Ok(Outcome::Done(Pushed {
-            branch,
-            pull_request,
-            head: sha,
-            check_run,
-        }));
+    let log = match &checked.log {
+        Some(log) => log,
+        None if !merged => {
+            repository
+                .create_failed_check_run(
+                    CHECK_RUN,
+                    &sha,
+                    "Conflict round failed",
+                    &format!("The Implementer did not merge `{base}`."),
+                )
+                .await?;
+            return Ok(Outcome::NotMerged);
+        }
+        None => {
+            let check_run = repository
+                .create_check_run(CHECK_RUN, &sha, "in_progress")
+                .await?;
+            return Ok(Outcome::Done(Pushed {
+                branch: checked.branch.clone(),
+                pull_request,
+                head: sha,
+                check_run,
+            }));
+        }
     };
     let summary = format!(
         "`.mobius/check` failed {} times. The last output ends with these lines:\n\n```\n{log}\n```",
@@ -703,7 +813,7 @@ async fn implement(
     repository
         .create_failed_check_run(CHECK_RUN, &sha, "Local check failed", &summary)
         .await?;
-    Ok(Outcome::CheckFailed(log))
+    Ok(Outcome::CheckFailed(log.clone()))
 }
 
 // Gives `None` when the local check passes.

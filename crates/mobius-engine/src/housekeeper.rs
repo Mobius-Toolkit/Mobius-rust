@@ -13,7 +13,7 @@ const MIN_FREE_DISK: u64 = 20 << 30;
 
 const ERROR_TAIL: usize = 2_000;
 
-// The default `max_worker_restarts` of 3 gives 60 seconds in total, more than a short failure of the GitHub API.
+// Each Worker restart waits for this delay. The total wait is `max_worker_restarts` times `RESTART_DELAY`.
 pub const RESTART_DELAY: Duration = Duration::from_secs(20);
 
 pub(crate) fn spawn(engine: Engine) {

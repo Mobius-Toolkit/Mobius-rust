@@ -1,6 +1,6 @@
 use mobius_domain::{Author, InboxKind, Session, TranscriptRow};
 use mobius_engine::config::Config;
-use mobius_engine::{Engine, chat, github, inbox, workstreams};
+use mobius_engine::{Engine, RESTART_DELAY, chat, github, inbox, workstreams};
 use mobius_testkit::fake_github::{CheckRun, FakeGitHub, InlineComment, SubmittedReview, Thread};
 use mobius_testkit::{git, install_fake_harness, start_with, wait_for};
 use serde_json::Value;
@@ -103,6 +103,21 @@ async fn sessions(engine: &Engine, role: &str) -> Vec<Session> {
         .into_iter()
         .filter(|session| session.role == role)
         .collect()
+}
+
+// Moves the clock over the delay of the restart, so that the test does not wait in real time.
+async fn skip_restart_delay(engine: &Engine) {
+    wait_for(async || {
+        sessions(engine, "reviewer")
+            .await
+            .iter()
+            .any(|session| session.end_reason.as_deref() == Some("failed"))
+            .then_some(())
+    })
+    .await;
+    tokio::time::pause();
+    tokio::time::advance(RESTART_DELAY).await;
+    tokio::time::resume();
 }
 
 async fn ended_reviewers(engine: &Engine, count: usize) -> Vec<Session> {
@@ -805,6 +820,7 @@ async fn a_failed_review_run_shows_the_reason_and_the_restart_keeps_the_round_nu
     .await;
 
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    skip_restart_delay(&engine).await;
 
     wait_for(async || {
         (task_state(&engine, 41).await.as_deref() == Some("ready_for_review")).then_some(())

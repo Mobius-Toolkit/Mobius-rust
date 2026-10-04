@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
+use std::time::Duration;
 
 use mobius_domain::InboxKind;
 use time::OffsetDateTime;
@@ -11,6 +12,9 @@ use crate::{Engine, TIME_FORMAT, implementer, inbox, lead_events};
 const MIN_FREE_DISK: u64 = 20 << 30;
 
 const ERROR_TAIL: usize = 2_000;
+
+// The default `max_worker_restarts` of 3 gives 60 seconds in total, more than a short failure of the GitHub API.
+pub const RESTART_DELAY: Duration = Duration::from_secs(20);
 
 pub(crate) fn spawn(engine: Engine) {
     tokio::spawn(async move {
@@ -127,7 +131,7 @@ pub(crate) async fn wait_for_disk(
     Ok(())
 }
 
-// At `max_worker_restarts`, the task goes to a human, and the Lead gets a stop event.
+// Waits `RESTART_DELAY` before it gives `true`. At `max_worker_restarts`, the task goes to a human, and the Lead gets a stop event.
 pub(crate) async fn restart(
     engine: &Engine,
     repository: &str,
@@ -139,6 +143,7 @@ pub(crate) async fn restart(
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let max = engine.config.max_worker_restarts;
     if engine.store.tasks().add_worker_restart(task, max).await? {
+        tokio::time::sleep(RESTART_DELAY).await;
         return Ok(true);
     }
     if !implementer::hand_to_human(engine, repository, task, number).await? {

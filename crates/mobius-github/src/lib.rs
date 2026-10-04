@@ -234,7 +234,7 @@ pub struct ReviewThread {
     pub authors: Vec<String>,
 }
 
-// The links of an open issue to the other open issues of its repository.
+// The links of an open issue of the repository.
 #[derive(Clone, PartialEq)]
 pub struct IssueLinks {
     pub parent: Option<i64>,

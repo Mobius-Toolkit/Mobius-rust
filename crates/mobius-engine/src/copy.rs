@@ -31,7 +31,7 @@ pub(crate) async fn sync(
 
 // Reads again the trees that have a sub-issue link or a blocker link that is different from the links of the last sync or `relink`.
 // GitHub can change a link with no change of `updated_at`, so the `since` poll does not see it.
-// A new or reopened issue has no row in a tree, but the tree of its parent has a new row.
+// An issue that is new in the links, because it is new or it opened again, can have a new parent, so the trees that hold its parent are stale.
 // The number of sub-issues of a parent shows a link of a closed issue, which the query of the links does not read.
 // Two moves in opposite directions that keep the number of sub-issues of each parent show after the next full sync.
 // A moved issue and its descendants get another Workstream, which the blocker rows of the other trees store.

@@ -636,6 +636,7 @@ async fn implement(
         Some(outcome) => return Ok(outcome),
         None => None,
     };
+    let repository = engine.repository(name)?;
     let merged = !job.conflict_round
         || mobius_runner::head_contains(data_dir, &worktree, &base_commit).await?;
     let sha = {

@@ -134,7 +134,7 @@ async fn the_full_sync_copies_the_nested_sub_issues_with_state_labels_and_author
     github.add_issue(REPOSITORY, 12, "Integrate loyalty plans");
     github.add_label(REPOSITORY, 12, "mobius:workstream", "owner");
     github.add_issue(REPOSITORY, 41, "Add plan model");
-    github.add_label(REPOSITORY, 41, "mobius:working", "owner");
+    github.add_label(REPOSITORY, 41, "enhancement", "owner");
     github.add_label(REPOSITORY, 41, "bug", "owner");
     github.add_sub_issue(REPOSITORY, 12, 41);
     github.add_issue(REPOSITORY, 50, "Store the price in cents");
@@ -163,7 +163,7 @@ async fn the_full_sync_copies_the_nested_sub_issues_with_state_labels_and_author
             (12, 51, 43, open(), owner()),
         ]
     );
-    assert_eq!(labels(&engine, 41).await, ["bug", "mobius:working"]);
+    assert_eq!(labels(&engine, 41).await, ["bug", "enhancement"]);
     assert_eq!(labels(&engine, 50).await, Vec::<String>::new());
 }
 

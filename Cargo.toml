@@ -44,3 +44,9 @@ mobius-engine = { path = "crates/mobius-engine" }
 mobius-store = { path = "crates/mobius-store" }
 mobius-github = { path = "crates/mobius-github" }
 mobius-runner = { path = "crates/mobius-runner" }
+
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3

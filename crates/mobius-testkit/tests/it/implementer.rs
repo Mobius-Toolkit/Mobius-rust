@@ -2,13 +2,15 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::time::Duration;
 
 use mobius_domain::{InboxKind, Session, TranscriptRow};
+use mobius_engine::config::Config;
 use mobius_engine::{Engine, github, inbox, tasks, workstreams};
 use mobius_testkit::fake_github::{
     BOT_USER_ID, CheckRun, FakeGitHub, INSTALLATION_TOKEN, PullRequest,
 };
-use mobius_testkit::{git, install_fake_harness, start_with_config, wait_for};
+use mobius_testkit::{git, install_fake_harness, start_with, wait_for};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -41,6 +43,17 @@ async fn connect(
     lead: &str,
     implementer: &str,
 ) -> Engine {
+    connect_with(data_dir, github, extra_config, lead, implementer, |_| {}).await
+}
+
+async fn connect_with(
+    data_dir: &TempDir,
+    github: &FakeGitHub,
+    extra_config: &str,
+    lead: &str,
+    implementer: &str,
+    adjust: impl FnOnce(&mut Config),
+) -> Engine {
     github.add_manifest_code("manifest-code");
     github.add_repository(REPOSITORY);
     github.add_issue(REPOSITORY, 12, "Integrate loyalty plans");
@@ -61,8 +74,14 @@ async fn connect(
         "devin",
         &format!("{IMPLEMENTER_OPTIONS}\n{implementer}"),
     );
-    let engine =
-        start_with_config(data_dir.path(), "correct horse", &github.url, extra_config).await;
+    let engine = start_with(
+        data_dir.path(),
+        "correct horse",
+        &github.url,
+        extra_config,
+        adjust,
+    )
+    .await;
     github::convert_manifest(&engine, "manifest-code")
         .await
         .unwrap();
@@ -390,7 +409,10 @@ async fn a_second_task_of_the_issue_gets_the_next_free_branch() {
     );
     let implementer =
         format!("[[prompts]]\n{CANNOT_DO}\n[[prompts]]\nwhen = \"Start again.\"\n{COMMIT}");
-    let engine = connect(&data_dir, &github, "", &lead, &implementer).await;
+    let engine = connect_with(&data_dir, &github, "", &lead, &implementer, |config| {
+        config.lead_idle_timeout = Duration::from_secs(30);
+    })
+    .await;
     github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
     ended_implementers(&engine, 1).await;
     wait_for(async || task_state(&engine).await.is_none().then_some(())).await;

@@ -35,7 +35,7 @@ async fn connect(data_dir: &TempDir, github: &FakeGitHub, prompts: &str) -> Engi
         &github.url,
         "",
         |config| {
-            config.lead_idle_timeout = Duration::from_secs(5);
+            config.lead_idle_timeout = Duration::from_secs(20);
         },
     )
     .await;

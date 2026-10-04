@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT workstream AS \"workstream!: i64\" FROM copied_blockers\n               WHERE repository = ? AND blocker_workstream = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "workstream!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "copied_blockers",
+            "name": "workstream"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "059146ed6cb5431e47f63f8a68690c71cf144e4474fa1f2ecd5483542c54b6c5"
+}

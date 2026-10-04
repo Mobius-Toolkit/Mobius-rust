@@ -246,7 +246,7 @@ pub(crate) async fn issue_autopilot(
 }
 
 // The last `labeled` event of `mobius:autopilot` decides, so a trusted bot or the Mobius App cannot turn Autopilot on.
-fn added_by_trusted_user(config: &Config, events: &[IssueEvent]) -> bool {
+pub(crate) fn added_by_trusted_user(config: &Config, events: &[IssueEvent]) -> bool {
     events
         .iter()
         .rev()

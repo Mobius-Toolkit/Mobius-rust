@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO copied_issues (repository, workstream, position, number, parent, title, body,\n                                       state, author, html_url, repository_url)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "77a7312ecaa4b12dba1be59838fe9f539a033040740df1432bfffaaacaea0e25"
+}

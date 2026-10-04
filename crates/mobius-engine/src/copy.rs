@@ -1,9 +1,10 @@
 use std::error::Error;
 
-use mobius_github::{Issue, Repository};
-use mobius_store::{CopiedBlocker, CopiedIssue, CopiedWorkstream};
+use mobius_domain::Live;
+use mobius_github::{Issue, IssueEvent, Repository};
+use mobius_store::{ChangedIssue, CopiedBlocker, CopiedIssue, CopiedWorkstream};
 
-use crate::labels::WORKSTREAM_LABEL;
+use crate::labels::{AUTOPILOT_LABEL, WORKSTREAM_LABEL};
 use crate::{Engine, ends, tasks, workstreams};
 
 pub(crate) async fn sync(
@@ -12,19 +13,134 @@ pub(crate) async fn sync(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut workstreams = Vec::new();
     for workstream in repository.open_issues_with_label(WORKSTREAM_LABEL).await? {
-        workstreams.push(CopiedWorkstream {
-            number: workstream.number,
-            autopilot: workstreams::issue_autopilot(engine, repository, &workstream).await?,
-            issues: tree(repository, workstream.number).await?,
-            title: workstream.title,
-            body: workstream.body.unwrap_or_default(),
-        });
+        let autopilot = workstreams::issue_autopilot(engine, repository, &workstream).await?;
+        workstreams.push(copied_workstream(repository, &workstream, autopilot).await?);
     }
     engine
         .store
         .workstream_copy()
         .replace(&repository.full_name, &workstreams)
-        .await
+        .await?;
+    engine.broadcast(Live::Workstreams);
+    Ok(())
+}
+
+// Applies the change of one issue of the repository to the copy, and gives `true` when the copy changes.
+// `events` are all events of the issue. The parent is read for an issue that the copy does not have,
+// because its new link to a Workstream or a task changes the walk order of that Workstream.
+// A task that gets or loses the Workstream label changes the walk order of its Workstream too,
+// and the Workstream of its blockers in the other trees.
+// A new Workstream changes the Workstream of the blockers that are in its tree, in the other trees.
+pub(crate) async fn update(
+    engine: &Engine,
+    repository: &Repository,
+    issue: &Issue,
+    events: &[IssueEvent],
+    find_parent: bool,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    let name = &repository.full_name;
+    let copy = engine.store.workstream_copy();
+    let known = copy
+        .workstream_of(name, issue.number, &issue.repository_url)
+        .await?
+        .is_some();
+    let label_changed = copy
+        .workstreams_with_label_change(
+            name,
+            issue.number,
+            &issue.repository_url,
+            WORKSTREAM_LABEL,
+            issue.has_label(WORKSTREAM_LABEL),
+        )
+        .await?;
+    let stored = copy.has_workstream(name, issue.number).await?;
+    let wanted = issue.has_label(WORKSTREAM_LABEL) && issue.state == "open";
+    let autopilot = issue.has_label(AUTOPILOT_LABEL)
+        && workstreams::added_by_trusted_user(&engine.config, events);
+    let body = issue.body.clone().unwrap_or_default();
+    let mut changed = false;
+    let mut added = Vec::new();
+    if stored && !wanted {
+        copy.remove_workstream(name, issue.number).await?;
+        changed = true;
+    } else if stored {
+        changed = copy
+            .update_workstream(name, issue.number, &issue.title, &body, autopilot)
+            .await?;
+    } else if wanted {
+        let workstream = copied_workstream(repository, issue, autopilot).await?;
+        copy.add_workstream(name, &workstream).await?;
+        added = workstream.issues.iter().map(|issue| issue.number).collect();
+        changed = true;
+    }
+    let changed_issue = ChangedIssue {
+        number: issue.number,
+        repository_url: issue.repository_url.clone(),
+        title: issue.title.clone(),
+        body,
+        state: issue.state.clone(),
+        labels: issue
+            .labels
+            .iter()
+            .map(|label| label.name.clone())
+            .collect(),
+        author: issue.user.login.clone(),
+    };
+    changed |= copy.update_issue(&changed_issue).await?;
+    if issue.state != "open" {
+        changed |= copy.remove_blocker(name, issue.number).await?;
+    }
+    let mut stale = label_changed.clone();
+    if stored && !wanted {
+        stale.push(issue.number);
+    }
+    let mut rebuilt = label_changed;
+    for workstream in stale {
+        for blocked in copy.workstreams_with_blocker_in(name, workstream).await? {
+            if !rebuilt.contains(&blocked) {
+                rebuilt.push(blocked);
+            }
+        }
+    }
+    for number in added {
+        for blocked in copy.workstreams_with_blocker(name, number).await? {
+            if blocked != issue.number && !rebuilt.contains(&blocked) {
+                rebuilt.push(blocked);
+            }
+        }
+    }
+    for workstream in rebuilt {
+        let issues = tree(repository, workstream).await?;
+        copy.replace_issues(name, workstream, &issues).await?;
+        changed = true;
+    }
+    if known || !find_parent {
+        return Ok(changed);
+    }
+    if let Some(parent) = repository.parent(issue.number).await?
+        && let Some(workstream) = copy
+            .workstream_of(name, parent.number, &parent.repository_url)
+            .await?
+    {
+        let issues = tree(repository, workstream).await?;
+        copy.replace_issues(name, workstream, &issues).await?;
+        changed = true;
+    }
+    Ok(changed)
+}
+
+async fn copied_workstream(
+    repository: &Repository,
+    workstream: &Issue,
+    autopilot: bool,
+) -> Result<CopiedWorkstream, Box<dyn Error + Send + Sync>> {
+    Ok(CopiedWorkstream {
+        number: workstream.number,
+        title: workstream.title.clone(),
+        body: workstream.body.clone().unwrap_or_default(),
+        autopilot,
+        issues: tree(repository, workstream.number).await?,
+    })
 }
 
 // The walk follows the rules of `tasks::list`, but it keeps each issue.

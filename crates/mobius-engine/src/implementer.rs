@@ -2,7 +2,7 @@ use std::error::Error;
 use std::path::Path;
 use std::pin::Pin;
 
-use mobius_domain::organization;
+use mobius_domain::{Live, organization};
 use mobius_github::{PullRequest, Repository};
 use mobius_runner::{Check, Session};
 use mobius_store::Task;
@@ -14,8 +14,8 @@ use crate::labels::{NEEDS_HUMAN_LABEL, WORKING_LABEL};
 use crate::lead::{self, Recorder};
 use crate::trust::{self, app_login};
 use crate::{
-    Engine, TIME_FORMAT, dispatch, ends, housekeeper, issues, lead_events, limits, mcp, reviewer,
-    threads, workers,
+    Engine, TIME_FORMAT, agents, dispatch, ends, housekeeper, issues, lead_events, limits, mcp,
+    reviewer, threads, workers,
 };
 
 pub(crate) const ROLE: &str = "implementer";
@@ -65,7 +65,7 @@ pub(crate) async fn start(
     workstream: i64,
     number: i64,
     instructions: &str,
-    parent: i64,
+    parent: Option<i64>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let name = &repository.full_name;
     let task = dispatch::live_task(engine, name, workstream, number).await?;
@@ -97,7 +97,7 @@ pub(crate) async fn start(
         prompt: format!(
             "{ROLE_PROMPT}\n{sections}# Brief\n\n{brief}\n\n# Issue\n\n{issue}\n# Lead instructions\n\n{instructions}"
         ),
-        parent: Some(parent),
+        parent,
     };
     engine
         .store
@@ -666,6 +666,8 @@ async fn implement(
                 .tasks()
                 .set_pull_request(job.task, pull_request.number)
                 .await?;
+            let open = engine.store.sessions().get(session_id).await?;
+            engine.broadcast(Live::Agent(agents::node(open)));
             pull_request
         }
     };

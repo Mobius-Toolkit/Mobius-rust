@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE copied_blockers SET blocker_workstream_title = ?1\n             WHERE repository = ?2 AND blocker_workstream = ?3\n               AND blocker_workstream_title IS NOT ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "592d5ed16bd679d94d579bad984eb77cef330667490e1f864eb193d1dd12bf26"
+}

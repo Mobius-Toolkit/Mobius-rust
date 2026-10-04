@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM copied_workstreams WHERE repository = ? AND number = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "350ed96f5e60f6e49afcac78898beb89a679125499131fbadcbc7a450c898f09"
+}

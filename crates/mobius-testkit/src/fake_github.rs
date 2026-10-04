@@ -1102,6 +1102,17 @@ impl FakeGitHub {
         issue.updated_at = now;
     }
 
+    pub fn set_title(&self, repository: &str, number: i64, title: &str) {
+        let mut records = self.state.lock().unwrap();
+        let now = records.tick();
+        let issue = records
+            .issues
+            .get_mut(&(repository.to_string(), number))
+            .unwrap();
+        issue.title = title.to_string();
+        issue.updated_at = now;
+    }
+
     pub fn close_issue(&self, repository: &str, number: i64) {
         self.state
             .lock()
@@ -1154,6 +1165,18 @@ impl FakeGitHub {
             .unwrap()
             .sub_issues
             .push((repository.to_string(), child));
+    }
+
+    // Creates the issue and the link in one step, so that a poll sees both.
+    pub fn add_sub_issue_of(&self, repository: &str, parent: i64, number: i64, title: &str) {
+        let mut records = self.state.lock().unwrap();
+        records.insert_issue(repository, number, title, "", "owner", false);
+        records
+            .issues
+            .get_mut(&(repository.to_string(), parent))
+            .unwrap()
+            .sub_issues
+            .push((repository.to_string(), number));
     }
 
     // Links `child` of `child_repository` as a sub-issue of `parent` in `repository`,

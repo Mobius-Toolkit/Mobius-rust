@@ -428,6 +428,16 @@ a.btn {
   border-bottom: 1px solid var(--line);
 }
 
+@media (min-width: 701px) {
+  .entry.hinted {
+    flex-wrap: wrap;
+  }
+
+  .entry.hinted .grow {
+    flex-basis: 100%;
+  }
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -552,6 +562,30 @@ button.chip.on {
 
 .brief .md {
   padding: 0 14px 10px;
+}
+
+.needs-human {
+  flex: none;
+  max-height: 30dvh;
+  overflow-y: auto;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+.needs-human .item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+}
+
+.needs-human .item .grow {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.needs-human .error {
+  padding: 0 14px;
 }
 
 .msg {

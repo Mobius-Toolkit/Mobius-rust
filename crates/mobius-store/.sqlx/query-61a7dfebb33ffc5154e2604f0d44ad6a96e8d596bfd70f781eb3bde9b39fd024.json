@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM copied_issues WHERE repository = ? AND workstream = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "61a7dfebb33ffc5154e2604f0d44ad6a96e8d596bfd70f781eb3bde9b39fd024"
+}

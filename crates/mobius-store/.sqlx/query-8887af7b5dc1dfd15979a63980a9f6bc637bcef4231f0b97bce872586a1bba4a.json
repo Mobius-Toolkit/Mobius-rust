@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO copied_blockers (repository, workstream, position, number,\n                                              blocker_workstream, blocker_workstream_title)\n                 VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "8887af7b5dc1dfd15979a63980a9f6bc637bcef4231f0b97bce872586a1bba4a"
+}

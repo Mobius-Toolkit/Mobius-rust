@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, role, harness, model, organization, repository, workstream, acp_session_id,\n                      started_at AS \"started_at: OffsetDateTime\",\n                      ended_at AS \"ended_at: OffsetDateTime\", end_reason, queue_reason, issue, parent\n               FROM sessions WHERE ended_at IS NULL ORDER BY id",
+  "query": "SELECT s.id, s.role, s.harness, s.model, s.organization, s.repository, s.workstream, s.acp_session_id,\n                      s.started_at AS \"started_at: OffsetDateTime\",\n                      s.ended_at AS \"ended_at: OffsetDateTime\", s.end_reason, s.queue_reason, s.issue, s.parent,\n                      w.title AS workstream_title, i.title AS issue_title,\n                      (SELECT t.pull_request FROM tasks t\n                       WHERE t.repository = s.repository AND t.issue = s.issue\n                       ORDER BY t.id DESC LIMIT 1) AS pull_request\n               FROM sessions s\n               LEFT JOIN copied_workstreams w ON w.repository = s.repository AND w.number = s.workstream\n               LEFT JOIN copied_issues i\n                 ON i.repository = s.repository AND i.workstream = s.workstream AND i.number = s.issue\n               WHERE s.ended_at IS NULL ORDER BY s.id",
   "describe": {
     "columns": [
       {
@@ -156,6 +156,39 @@
             "name": "parent"
           }
         }
+      },
+      {
+        "name": "workstream_title",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "copied_workstreams",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "issue_title",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "copied_issues",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "pull_request",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "pull_request"
+          }
+        }
       }
     ],
     "parameters": {
@@ -175,8 +208,11 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "9b298441311634be3772533a9b69548ebe1604a5445fbe68ab85345411866b73"
+  "hash": "64a18def94f2dcc038dfb3f1edafd9de61258fa016e42ed20dd444e00a113b68"
 }

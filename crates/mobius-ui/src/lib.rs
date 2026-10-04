@@ -11,14 +11,15 @@ use markdown::Markdown;
 use mobius_api::{
     active_agents, agent_tree, chat_seen, chat_send, chat_stop, chat_view, checkup, devices,
     drain_cancel, drain_state, fix_labels, github_apps, github_manifest, inbox_dismiss,
-    inbox_items, inbox_resume, live, login, logout, organizations, release, release_changes,
-    task_list, transcript_lines, unread, upgrade, upgrade_error as upgrade_error_state,
-    workstream_autopilot, workstream_close, workstreams,
+    inbox_items, inbox_resume, live, login, logout, needs_human_list, needs_human_workstreams,
+    organizations, release, release_changes, task_list, task_resume, transcript_lines, unread,
+    upgrade, upgrade_error as upgrade_error_state, workstream_autopilot, workstream_close,
+    workstreams,
 };
 use mobius_domain::{
-    AgentNode, Author, ChatMessage, DrainEnd, FeedRow, InboxItem, InboxKind, LabelStatus, Live,
-    PAUSED, PermissionStatus, RepositoryCheckup, TaskLine, TranscriptLine, Workstream, agent_rows,
-    shown_agents,
+    ActiveAgent, AgentNode, Author, ChatMessage, DrainEnd, FeedRow, InboxItem, InboxKind,
+    LabelStatus, Live, PAUSED, PermissionStatus, RepositoryCheckup, TaskLine, TranscriptLine,
+    Workstream, agent_rows, shown_agents,
 };
 use time::UtcOffset;
 use time::macros::format_description;
@@ -788,10 +789,21 @@ fn OrganizationSwitch() -> Element {
 fn WorkstreamEntries() -> Element {
     let Workstreams(workstream_list) = use_context();
     let Organization(organization) = use_context();
+    let needs_human = use_resource(move || async move {
+        workstream_list.read();
+        needs_human_workstreams().await
+    });
     match &*workstream_list.read() {
         Some(Ok(list)) => rsx! {
             for workstream in list.iter().filter(|workstream| mobius_domain::organization(&workstream.repository) == organization()).cloned() {
-                WorkstreamEntry { key: "{workstream.repository}#{workstream.number}", workstream }
+                WorkstreamEntry {
+                    key: "{workstream.repository}#{workstream.number}",
+                    needs_human: matches!(
+                        &*needs_human.read(),
+                        Some(Ok(keys)) if keys.contains(&(workstream.repository.clone(), workstream.number))
+                    ),
+                    workstream,
+                }
             }
         },
         Some(Err(error)) => rsx! { div { class: "error entry", {error_text(error)} } },
@@ -800,7 +812,7 @@ fn WorkstreamEntries() -> Element {
 }
 
 #[component]
-fn WorkstreamEntry(workstream: Workstream) -> Element {
+fn WorkstreamEntry(workstream: Workstream, needs_human: bool) -> Element {
     let state: LiveState = use_context();
     let (owner, repo) = workstream.repository.split_once('/').unwrap_or_default();
     let unread = state
@@ -815,13 +827,16 @@ fn WorkstreamEntry(workstream: Workstream) -> Element {
         .unwrap_or(0);
     rsx! {
         Link {
-            class: "entry",
+            class: if needs_human { "entry hinted" } else { "entry" },
             active_class: "sel",
             to: Route::Chat { owner: owner.to_string(), repo: repo.to_string(), number: workstream.number },
             span { class: "grow", "{workstream.title}" }
             span { class: "muted small", "#{workstream.number}" }
             if workstream.all_tasks_closed {
                 span { class: "chip plain", "done" }
+            }
+            if needs_human {
+                span { class: "chip warn", "needs you" }
             }
             if unread > 0 {
                 span { class: "count", "{unread}" }
@@ -1030,7 +1045,7 @@ fn NewWorkstream() -> Element {
 
 // All active agents of the server in one group for each role, of all organizations.
 // The resource runs again after a new live connection and when a `Live::Agent` event changes
-// `LiveState.agents`: at the start of a session, at the slot start, at a change of the queue reason, and at the end.
+// `LiveState.agents`: at the start of a session, at the slot start, at a change of the queue reason, when the pull request opens, and at the end.
 #[component]
 fn AgentsPage() -> Element {
     let state: LiveState = use_context();
@@ -1052,8 +1067,8 @@ fn AgentsPage() -> Element {
             for group in overview.groups.iter() {
                 div { key: "{group.name}", class: "label section", "{group.name} {group.count} / {group.max}" }
                 div { class: "list",
-                    for node in group.agents.iter() {
-                        AgentRow { key: "{node.session.id}", node: node.clone() }
+                    for agent in group.agents.iter() {
+                        AgentRow { key: "{agent.node.session.id}", agent: agent.clone() }
                     }
                 }
             }
@@ -1073,34 +1088,38 @@ fn AgentsPage() -> Element {
 }
 
 #[component]
-fn AgentRow(node: AgentNode) -> Element {
+fn AgentRow(agent: ActiveAgent) -> Element {
+    let node = &agent.node;
     let session = &node.session;
-    // The ticket of the session, or its Workstream, or only the org (the Triager chat of an org).
-    let target = match session.issue {
-        Some(issue) => format!("{}#{issue}", session.repository),
-        None if session.workstream != 0 => {
-            format!("{} Workstream #{}", session.repository, session.workstream)
-        }
-        None => String::new(),
+    let numbered = |number: i64, title: &Option<String>| match title {
+        Some(title) => format!("#{number} {title}"),
+        None => format!("#{number}"),
     };
-    let mut detail = format!("{} · {}", session.role, session.organization);
-    if !target.is_empty() {
-        detail.push_str(" · ");
-        detail.push_str(&target);
-    }
     rsx! {
         div { class: "item",
             span { class: if session.queue_reason.is_some() { "dot queued" } else { "dot live" } }
             div { class: "grow",
                 div { "{node.role} {node.title}" }
                 div { class: "muted small",
-                    "{detail}"
-                    if let Some(reason) = &node.session.queue_reason {
+                    "{session.role} · {session.organization}"
+                    if session.workstream != 0 || session.issue.is_some() {
+                        " · {session.repository}"
+                    }
+                    if let Some(reason) = &session.queue_reason {
                         " · {reason}"
                     }
                 }
+                if session.workstream != 0 {
+                    div { class: "muted small ellip", "Workstream {numbered(session.workstream, &agent.workstream_title)}" }
+                }
+                if let Some(issue) = session.issue {
+                    div { class: "muted small ellip", "Ticket {numbered(issue, &agent.issue_title)}" }
+                }
+                if let Some(pull_request) = agent.pull_request {
+                    div { class: "muted small", "Pull request #{pull_request}" }
+                }
             }
-            if let Some(reason) = &node.session.queue_reason {
+            if let Some(reason) = &session.queue_reason {
                 span { class: "chip warn",
                     if reason.starts_with(PAUSED) { "paused" } else { "queued" }
                 }
@@ -1722,6 +1741,7 @@ fn Conversation(
         });
     });
     let stop_key = (organization.clone(), repository.clone());
+    let lead_chat = brief.is_some();
     rsx! {
         div { class: "column",
             div { class: "head",
@@ -1794,6 +1814,9 @@ fn Conversation(
                     if let Some(error) = lead_state.error {
                         div { class: "error", "The chat session failed: {error}" }
                     }
+                }
+                if lead_chat {
+                    NeedsHumanList { repository: repository.clone(), number }
                 }
                 form {
                     class: "composer",
@@ -1981,6 +2004,59 @@ fn Agents(repository: String, number: i64, on_close: Option<EventHandler>) -> El
                 }
             }
         }
+    }
+}
+
+// A `Live::Workstreams` event reads the list again.
+#[component]
+fn NeedsHumanList(repository: String, number: i64) -> Element {
+    let Workstreams(mut workstream_list) = use_context();
+    let mut error = use_signal(String::new);
+    let issues = use_resource(use_reactive(
+        (&repository, &number),
+        move |(repository, number)| async move {
+            workstream_list.read();
+            needs_human_list(repository, number).await
+        },
+    ));
+    match &*issues.read() {
+        None => rsx! {},
+        Some(Err(failure)) => rsx! {
+            div { class: "error note", {error_text(failure)} }
+        },
+        Some(Ok(issues)) if issues.is_empty() => rsx! {},
+        Some(Ok(issues)) => rsx! {
+            div { class: "needs-human",
+                if !error().is_empty() {
+                    div { class: "error", {error} }
+                }
+                for issue in issues.iter().cloned() {
+                    div { key: "{issue.number}", class: "item",
+                        a { class: "grow", href: "{issue.url}", target: "_blank", "#{issue.number} {issue.title}" }
+                        if let (Some(number), Some(url)) = (issue.pull_request, issue.pull_request_url) {
+                            a { href: "{url}", target: "_blank", "PR #{number}" }
+                        }
+                        button {
+                            class: "btn primary",
+                            onclick: {
+                                let repository = repository.clone();
+                                move |_| {
+                                    let repository = repository.clone();
+                                    async move {
+                                        match task_resume(repository, issue.number).await {
+                                            Ok(()) => error.set(String::new()),
+                                            Err(failure) => error.set(error_text(&failure)),
+                                        }
+                                        workstream_list.restart();
+                                    }
+                                }
+                            },
+                            "Resume"
+                        }
+                    }
+                }
+            }
+        },
     }
 }
 

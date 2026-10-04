@@ -370,6 +370,78 @@ async fn a_fix_round_of_the_judge_from_needs_human_puts_the_working_label_back()
 }
 
 #[tokio::test]
+async fn mobius_ready_on_a_task_in_needs_human_starts_a_fix_round_on_the_same_pull_request() {
+    let data_dir = TempDir::new().unwrap();
+    let github = FakeGitHub::start().await;
+    let engine = connect_with(
+        &data_dir,
+        &github,
+        "max_fix_rounds = 1",
+        "shell = \"true\"",
+        &format!(
+            "{IMPLEMENTER}\n[[prompts]]\nwhen = \"Action: fix\"\nshell = \"echo x >> plan.txt && git commit -q -am Fix\"\n"
+        ),
+    )
+    .await;
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+    wait_for(async || (!inbox::list(&engine).await.unwrap().is_empty()).then_some(())).await;
+    github.add_review_comment(REPOSITORY, 42, None, BOT, "Rename plan to tier.");
+    wait_for(async || {
+        (task_state(&engine).await.as_deref() == Some("ready_for_review")).then_some(())
+    })
+    .await;
+    github.add_review_comment(REPOSITORY, 42, None, BOT, "Rename tier to plan.");
+    wait_for(async || {
+        let labels = github.labels(REPOSITORY, 41);
+        (task_state(&engine).await.as_deref() == Some("needs_human")
+            && labels.contains(&"mobius:needs-human".to_string()))
+        .then_some(())
+    })
+    .await;
+    let stopped = engine
+        .store
+        .tasks()
+        .live(REPOSITORY, 41)
+        .await
+        .unwrap()
+        .unwrap();
+    let remote = github.remote(REPOSITORY);
+    let head = git(&remote, &["rev-parse", "mobius/41"]);
+
+    github.remove_label(REPOSITORY, 41, "mobius:needs-human", "owner");
+    github.add_label(REPOSITORY, 41, "mobius:ready", "owner");
+
+    let fixed = wait_for(async || {
+        let fixed = git(&remote, &["rev-parse", "mobius/41"]);
+        (fixed != head).then_some(fixed)
+    })
+    .await;
+    git(&remote, &["merge-base", "--is-ancestor", &head, &fixed]);
+    let task = engine
+        .store
+        .tasks()
+        .live(REPOSITORY, 41)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.id, stopped.id);
+    assert_eq!(task.branch, stopped.branch);
+    assert_eq!(task.pull_request, stopped.pull_request);
+    assert_ne!(task.state, "stopped");
+    assert_eq!(github.pull_requests(REPOSITORY).len(), 1);
+    let labels = github.labels(REPOSITORY, 41);
+    assert!(labels.contains(&"mobius:working".to_string()), "{labels:?}");
+    assert!(!labels.contains(&"mobius:ready".to_string()), "{labels:?}");
+    assert!(
+        !labels.contains(&"mobius:needs-human".to_string()),
+        "{labels:?}"
+    );
+    let last = prompts(&engine, "implementer").await.pop().unwrap();
+    assert!(last.contains("Rename tier to plan."), "{last}");
+    assert!(last.contains("Action: fix"), "{last}");
+}
+
+#[tokio::test]
 async fn a_removal_of_the_working_label_stops_a_task_while_the_judge_runs_from_a_state_other_than_needs_human()
  {
     let data_dir = TempDir::new().unwrap();

@@ -24,11 +24,13 @@ pub use github_apps::{GitHubAppRow, GitHubApps};
 pub use harness_pauses::{HarnessPauses, Pause};
 pub use inbox_items::{InboxItems, NewInboxItem};
 pub use lead_events::{LeadEvent, LeadEvents};
-pub use sessions::{NewSession, Sessions};
+pub use sessions::{NewSession, OpenSession, Sessions};
 pub use sync_cursors::{SyncCursor, SyncCursors};
 pub use tasks::{Task, Tasks};
 pub use transcript::Transcript;
-pub use workstream_copy::{CopiedBlocker, CopiedIssue, CopiedWorkstream, WorkstreamCopy};
+pub use workstream_copy::{
+    ChangedIssue, CopiedBlocker, CopiedIssue, CopiedWorkstream, WorkstreamCopy,
+};
 
 #[derive(Clone)]
 pub struct Store {

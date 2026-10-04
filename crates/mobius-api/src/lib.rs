@@ -2,7 +2,7 @@ use dioxus::fullstack::{Redirect, ServerEvents, SetCookie, SetHeader};
 use dioxus::prelude::*;
 use mobius_domain::{
     ActiveAgents, AgentNode, ChatView, CheckupView, Devices, DrainEnd, InboxItem, Live,
-    ManifestForm, TaskLine, TranscriptLine, Unread, Workstream,
+    ManifestForm, NeedsHuman, TaskLine, TranscriptLine, Unread, Workstream,
 };
 
 #[cfg(feature = "server")]
@@ -298,6 +298,30 @@ pub async fn active_agents() -> ServerFnResult<ActiveAgents> {
 #[post("/api/tasks", _device: DeviceId, engine: Extension<Engine>)]
 pub async fn task_list(repository: String, workstream: i64) -> ServerFnResult<Vec<TaskLine>> {
     tasks::list(&engine, &repository, workstream)
+        .await
+        .map_err(ServerFnError::new)
+}
+
+#[post("/api/tasks/needs-human", _device: DeviceId, engine: Extension<Engine>)]
+pub async fn needs_human_list(
+    repository: String,
+    workstream: i64,
+) -> ServerFnResult<Vec<NeedsHuman>> {
+    tasks::needs_human(&engine, &repository, workstream)
+        .await
+        .map_err(ServerFnError::new)
+}
+
+#[get("/api/tasks/needs-human-workstreams", _device: DeviceId, engine: Extension<Engine>)]
+pub async fn needs_human_workstreams() -> ServerFnResult<Vec<(String, i64)>> {
+    tasks::needs_human_workstreams(&engine)
+        .await
+        .map_err(ServerFnError::new)
+}
+
+#[post("/api/tasks/resume", _device: DeviceId, engine: Extension<Engine>)]
+pub async fn task_resume(repository: String, issue: i64) -> ServerFnResult<()> {
+    tasks::resume(&engine, &repository, issue)
         .await
         .map_err(ServerFnError::new)
 }
